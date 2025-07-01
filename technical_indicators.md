@@ -161,4 +161,76 @@ Planned improvements:
 2. Machine learning integration
 3. Custom indicator creation
 4. Performance optimizations
-5. More documentation and examples 
+5. More documentation and examples
+
+## Regime Detector
+
+The `RegimeDetector` is a powerful tool for identifying the current market regime, which can be crucial for selecting the appropriate trading strategy. It is designed to be generic and can be used by any strategy that provides the necessary market metrics.
+
+### Implementation
+
+The `RegimeDetector` is located in `src.technical_analysis.regime_detector.py`. It analyzes a combination of volatility and trend indicators to classify the market into one of the following states:
+
+- **volatile**: The market is experiencing high volatility, typically identified by a normalized ATR value exceeding a defined threshold.
+- **trending_up**: The market is in a clear uptrend, identified by an ADX value above a trend threshold and a fast EMA above a slow EMA.
+- **trending_down**: The market is in a clear downtrend, with ADX above the threshold and a fast EMA below a slow EMA.
+- **ranging**: The market is not exhibiting a strong trend or high volatility.
+
+### Usage
+
+To use the `RegimeDetector`, first instantiate it with a configuration dictionary. Then, call the `detect_regime` method with a dictionary of market metrics.
+
+#### Initialization
+
+```python
+from src.technical_analysis.regime_detector import RegimeDetector
+
+# Configuration for the detector
+detector_config = {
+    'regime_window': 100,
+    'volatility_threshold': 0.02,
+    'trend_threshold': 25  # ADX threshold
+}
+
+regime_detector = RegimeDetector(detector_config)
+```
+
+#### Detecting the Regime
+
+The `detect_regime` method expects a single dictionary containing all the necessary metrics.
+
+```python
+metrics = {
+    "candle_buffer": self.candle_buffer,
+    "atr": self.atr.get_value(),
+    "ema_fast": self.ema_fast.get_value(),
+    "ema_slow": self.ema_slow.get_value(),
+    "adx": self.adx.get_value(),
+    "last_close": self.last_price
+}
+
+current_regime = await regime_detector.detect_regime(metrics)
+```
+
+### Configuration Parameters
+
+| Parameter              | Type  | Default | Description                                                                                             |
+| ---------------------- | ----- | ------- | ------------------------------------------------------------------------------------------------------- |
+| `regime_window`        | `int` | `100`   | The number of candles to consider for trend detection.                                                  |
+| `volatility_threshold` | `float` | `0.02`  | The normalized ATR threshold to identify a volatile market.                                             |
+| `trend_threshold`      | `float` | `25`    | The ADX value above which a market is considered to be trending.                                        |
+
+### Required Metrics
+
+The `detect_regime` method requires the following keys in its `metrics` dictionary:
+
+| Key             | Type                  | Description                                                                                             |
+| --------------- | --------------------- | ------------------------------------------------------------------------------------------------------- |
+| `candle_buffer` | `List[dict]`          | A list of candle data dictionaries.                                                                     |
+| `atr`           | `Optional[float]`     | The current ATR value.                                                                                  |
+| `adx`           | `Optional[float]`     | The current ADX value.                                                                                  |
+| `ema_fast`      | `Optional[float]`     | The value of the fast exponential moving average.                                                       |
+| `ema_slow`      | `Optional[float]`     | The value of the slow exponential moving average.                                                       |
+| `last_close`    | `Optional[float]`     | The most recent closing price. If not provided, it will be inferred from the `candle_buffer`.           |
+
+To use the indicators, simply import the desired class from `src.technical_analysis.technical_indicators` and instantiate it with the required parameters. The `update` method should be called with new market data, and the `get_value` or `get_values` methods can be used to retrieve the calculated indicator values. 

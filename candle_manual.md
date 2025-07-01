@@ -3,12 +3,14 @@
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Candle Basics](#candle-basics)
-3. [Event System](#event-system)
-4. [Integrated Candle Management](#integrated-candle-management)
-5. [Candle Consolidation](#candle-consolidation)
-6. [Technical Analysis](#technical-analysis)
-7. [Best Practices](#best-practices)
-8. [Examples](#examples)
+3. [Data Ingestion](#data-ingestion)
+4. [Event System](#event-system)
+5. [Integrated Candle Management](#integrated-candle-management)
+6. [Candle Consolidation and Resampling](#candle-consolidation-and-resampling)
+7. [Strategy Warm-Up Period](#strategy-warm-up-period)
+8. [Technical Analysis](#technical-analysis)
+9. [Best Practices](#best-practices)
+10. [Examples](#examples)
 
 ## Introduction
 
@@ -30,6 +32,30 @@ A candle represents price action over a specific timeframe and contains:
 ### Standard Timeframes
 ```python
 valid_timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']
+```
+
+## Data Ingestion
+
+The framework has moved away from a generic ZeroMQ-based subscription model towards a more robust, broker-specific data handling approach. Data is now primarily ingested through the active broker's WebSocket or REST API endpoints. This change ensures higher fidelity data and better integration with the broker's ecosystem.
+
+When a strategy is initialized, it specifies the required symbols and timeframes. The `BaseStrategy` and the underlying broker implementation handle the subscription and data fetching automatically. Historical data is pre-fetched to warm up the strategy, and live data is streamed subsequently.
+
+### Configuration
+
+Data requirements are defined directly in the strategy's configuration file. The `StrategyFactory` uses this configuration to set up the necessary data streams via the designated broker.
+
+```yaml
+# Example from a strategy's config.yaml
+strategy_name: MyAwesomeStrategy
+strategy_class: MyAwesomeStrategy
+base_timeframe: '1m'
+resample_timeframes: ['5m', '15m']
+symbols:
+  - 'XBT/USD'
+  - 'ETH/USD'
+warm_up_period_candles:
+  '1m': 200
+  '5m': 60
 ```
 
 ## Event System
@@ -151,194 +177,145 @@ async def handle_heartbeat(event: CandleEvent):
 
 ## Integrated Candle Management
 
-The framework provides integrated candle management through the `CandleDataManager` class, which is automatically available in all strategies through the `BaseStrategy` class.
+The framework provides integrated candle management through a singleton `EventManager` and a `CandleManager` instance that is injected into each strategy. This ensures that all parts of the application, from data providers to strategies, work from a unified event queue and consistent candle data.
+
+### Accessing the Candle Manager
+
+Within a strategy that inherits from `BaseStrategy`, the `CandleManager` is available as `self.candle_manager`. It is automatically initialized and configured by the `StrategyFactory` during the strategy's creation.
+
+```python
+# No manual instantiation is needed.
+# self.candle_manager is available in your strategy methods.
+
+class YourStrategy(BaseStrategy):
+    async def initialize(self):
+        # The candle manager is ready to be used.
+        self.candle_manager.get_candles(...)
+```
 
 ### Accessing Candle Data in Strategies
 
+The `BaseStrategy` provides convenient methods to access candle data managed by the `CandleManager`.
+
 ```python
 class YourStrategy(BaseStrategy):
-    async def on_new_candle(self, symbol: str, timeframe: str, candle_data: CandleData) -> None:
-        # Get latest candle
-        latest = self.get_latest_candle(symbol, timeframe)
+    async def on_live_candle(self, candle: Candle) -> None:
+        # Get latest candle for a specific symbol and timeframe
+        latest = self.candle_manager.get_latest_candle(candle.symbol, candle.timeframe)
         
         # Get previous candle
-        previous = self.get_previous_candle(symbol, timeframe)
+        previous = self.candle_manager.get_previous_candle(candle.symbol, candle.timeframe)
         
         # Get last 100 candles
-        candles = self.get_candles(symbol, timeframe, lookback=100)
+        candles = self.candle_manager.get_candles(candle.symbol, candle.timeframe, lookback=100)
         
         # Get as pandas DataFrame
-        df = self.get_dataframe(symbol, timeframe, lookback=100)
+        df = self.candle_manager.get_candles_as_df(candle.symbol, candle.timeframe, lookback=100)
 ```
 
-### Candle Data Structure
+## Candle Consolidation and Resampling
+
+A key feature of the `CandleManager` is its ability to resample a base timeframe (e.g., 1-minute candles) into multiple larger timeframes (e.g., 5-minute, 15-minute). This is done efficiently in real-time as new data arrives.
+
+The resampling process is now handled through a robust three-pass system designed to correctly process historical data snapshots and then transition smoothly to live data.
+
+### Three-Pass System for Historical Data
+
+When a strategy starts, it needs a "warm-up" period with historical data. The `CandleManager` uses a special process to ensure this data is loaded and resampled correctly before live trading begins.
+
+1.  **Pass 1: Load Base Candles**: The `CandleManager` is first populated with a historical snapshot of the *base timeframe* candles (e.g., 1-minute data).
+2.  **Pass 2: Resample and Backfill**: It then iterates over this historical data to build all the required larger timeframe candles (e.g., creating 5-minute candles from the 1-minute data). During this pass, candles for the larger timeframes are created and backfilled.
+3.  **Pass 3: Flush and Publish**: Finally, the manager performs a "flush," iterating through all completed historical candles (both base and resampled) and publishes them sequentially via `CANDLE_CLOSED` events. This allows the strategy to process them as if they were arriving in real-time, ensuring indicators are calculated correctly.
+
+This system guarantees that by the time the first live candle arrives, the strategy's state is fully synchronized with a complete and consistent set of historical data across all required timeframes.
+
+## Strategy Warm-Up Period
+
+To ensure that strategies have sufficient data to make informed trading decisions from the moment they go live, the framework implements a mandatory warm-up period. This period is handled by the `BaseStrategy` and is configured in the strategy's YAML file.
+
+During the warm-up phase, the `BaseStrategy` subscribes to historical candle data from the `CandleManager`. It provides two distinct abstract methods that developers must implement to handle the flow of historical and live data separately.
+
+### `on_historical_candle(candle: Candle)`
+
+This method is called for each candle processed during the initial warm-up phase. This includes both the base timeframe candles and any resampled, consolidated candles. Use this method to populate indicators and data structures with historical context without triggering trading logic.
+
+### `on_live_candle(candle: Candle)`
+
+This method is called only *after* the warm-up period is complete for all required timeframes. Live market data, whether from a real-time feed or a backtest, will trigger this method. All trading logic, such as signal generation and order placement, should be placed here.
+
+The `BaseStrategy` tracks the number of historical candles received for each timeframe against the counts specified in the `warm_up_period_candles` configuration. It will only begin calling `on_live_candle` once every timeframe has received its required number of historical candles.
 
 ```python
-@dataclass
-class CandleData:
-    timestamp: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    timeframe: str
-    symbol: str
-    vwap: float
-    trades: int
-    additional_data: dict
-```
+class MyElliottWaveStrategy(BaseStrategy):
 
-## Candle Consolidation
+    async def initialize(self):
+        # Initialization logic, e.g., setting up indicators
+        self.ema_50 = EMA(period=50)
 
-The framework provides a flexible `CandleConsolidator` class for combining candles into different timeframes. This is useful for:
-- Converting higher frequency data to lower frequency (e.g., 1-minute to 5-minute candles)
-- Creating custom timeframes not directly available from the data source
-- Aggregating historical data for analysis
+    async def on_historical_candle(self, candle: Candle) -> None:
+        """
+        Called for each historical candle during the warm-up period.
+        """
+        self.logger.info(f"Received historical {candle.timeframe} candle for {candle.symbol}: {candle.close_price}")
+        # Update indicators with historical data
+        if candle.timeframe == '5m':
+            self.ema_50.add_value(candle.close_price)
 
-### Using the CandleConsolidator
+    async def on_live_candle(self, candle: Candle) -> None:
+        """
+        Called for each new live candle after the warm-up is complete.
+        """
+        self.logger.info(f"Received live {candle.timeframe} candle for {candle.symbol}: {candle.close_price}")
+        # Update indicators with live data
+        if candle.timeframe == '5m':
+            self.ema_50.add_value(candle.close_price)
+            
+            # Implement trading logic
+            if candle.close_price > self.ema_50.get():
+                self.logger.info("Price crossed above 50-period EMA. Considering a long position.")
+                # Place buy order, etc.
 
-```python
-from src.data.candle_consolidator import CandleConsolidator, TimeFrame
-
-# Create a 5-minute consolidator from 1-minute candles
-consolidator = CandleConsolidator(
-    target_timeframe=5,  # 5-minute candles
-    base_timeframe=TimeFrame.MINUTE,  # Input is 1-minute candles
-    alignment="left"  # Align to start of period
-)
-
-# Add individual candles
-consolidated = consolidator.add_candle(candle)
-if consolidated:
-    # Period is complete, process the consolidated candle
-    process_candle(consolidated)
-
-# Add multiple candles at once
-consolidated_candles = consolidator.add_candles_batch(candles)
-
-# Force consolidate any pending candles
-final_candles = consolidator.force_consolidate_pending()
-
-# Get consolidated candles for a symbol
-candles = consolidator.get_consolidated_candles("BTC/USD")
-
-# Convert to pandas DataFrame
-df = consolidator.to_pandas("BTC/USD")
-```
-
-### Supported Timeframes
-
-The consolidator supports various timeframe units:
-- Seconds (S)
-- Minutes (M)
-- Hours (H)
-- Days (D)
-- Weeks (W)
-
-You can specify timeframes in two ways:
-1. Integer value with base timeframe:
-```python
-consolidator = CandleConsolidator(5, TimeFrame.MINUTE)  # 5-minute candles
-```
-
-2. String format:
-```python
-consolidator = CandleConsolidator("5M")  # 5-minute candles
-consolidator = CandleConsolidator("1H")  # 1-hour candles
-consolidator = CandleConsolidator("1D")  # 1-day candles
-```
-
-### Helper Functions
-
-The module provides convenient helper functions for common consolidations:
-
-```python
-from src.data.candle_consolidator import (
-    create_5min_consolidator,
-    create_1hour_consolidator,
-    create_daily_consolidator
-)
-
-# Create common consolidators
-five_min = create_5min_consolidator()
-one_hour = create_1hour_consolidator()
-daily = create_daily_consolidator()
 ```
 
 ## Technical Analysis
 
-### Using Technical Indicators
-
-The framework provides a comprehensive set of technical indicators that work seamlessly with our candle system. All indicators are designed to work directly with our `CandleData` structure.
-
-#### Available Indicators
-
-1. **Relative Strength Index (RSI)**
-```python
-from src.indicators.candle_indicators import CandleRSI
-
-# Initialize RSI
-rsi = CandleRSI(period=14)
-
-# Update with new candle
-rsi.update(candle_data)
-
-# Get current value
-rsi_value = rsi.get_value()
-```
-
-2. **Moving Average Convergence Divergence (MACD)**
-```python
-from src.indicators.candle_indicators import CandleMACD
-
-# Initialize MACD
-macd = CandleMACD(fast_period=12, slow_period=26, signal_period=9)
-
-# Update with new candle
-macd.update(candle_data)
-
-# Get current values
-macd_line = macd.get_macd()
-signal_line = macd.get_signal()
-histogram = macd.get_histogram()
-```
+The framework provides a rich set of tools for performing technical analysis on candle data.
+These tools are available as standalone utilities or can be integrated directly into your strategies.
 
 ## Best Practices
 
-1. **Memory Management**
-   - Clear history when no longer needed: `consolidator.clear_history()`
-   - Clear specific symbol: `consolidator.clear_history("BTC/USD")`
-   - Monitor memory usage through heartbeats
+1. **Error Handling**: Always implement proper error handling for ZMQ connection issues
+2. **Cleanup**: Ensure the subscriber is properly stopped in your strategy's cleanup method
+3. **Configuration**: Use configuration files to manage ZMQ addresses and topics
+4. **Monitoring**: Monitor the subscriber's status through the CandleManager's heartbeat events
+5. **Logging**: Use the built-in logger (`self.logger`) to record important events, decisions, and errors within your strategy. This is invaluable for debugging and performance analysis.
+6. **Configuration**: Keep strategy parameters in configuration files rather than hardcoding them. This makes it easier to tune, backtest, and manage your strategies.
+7. **State Management**: Be mindful of strategy state. Use the provided methods for warm-up (`on_historical_candle`) and live trading (`on_live_candle`) to ensure a clean separation of concerns.
 
-2. **Alignment**
-   - "left": Align to start of period (default)
-   - "right": Align to end of period
-   - "center": Align to middle of period
+## Error Handling
 
-3. **Batch Processing**
-   - Use `add_candles_batch()` for better performance when processing multiple candles
-   - Sort candles by timestamp before adding
+The candle system includes comprehensive error handling:
+1. Validates all incoming tick data
+2. Checks for data consistency
+3. Handles gaps in data
+4. Recovers from errors automatically
+5. Provides detailed error logging
 
-4. **Error Handling**
-   - Check for None returns from `add_candle()`
-   - Handle potential ValueError for invalid OHLC data
-   - Implement proper error handling in event handlers
-   - Monitor system health through heartbeats
+## Performance Considerations
 
-5. **Performance Considerations**
-   - The system maintains memory limits for ticks and candles
-   - Regular cleanup of old data
-   - Efficient event processing
-   - Optimized candle generation
-   - Regular health checks and monitoring
+1. The system maintains memory limits for ticks and candles
+2. Regular cleanup of old data
+3. Efficient event processing
+4. Optimized candle generation
+5. Regular health checks and monitoring
 
-6. **Monitoring and Maintenance**
-   - Monitor system health through heartbeats
-   - Check for data consistency
-   - Monitor memory usage
-   - Track tick and candle counts
-   - Monitor active symbols and timeframes
+## Monitoring and Maintenance
+
+1. Monitor system health through heartbeats
+2. Check for data consistency
+3. Monitor memory usage
+4. Track tick and candle counts
+5. Monitor active symbols and timeframes
 
 ## Examples
 

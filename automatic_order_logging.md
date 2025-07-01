@@ -60,6 +60,12 @@ The system logs the following types of events:
                    new_price: float = None, new_quantity: float = None)
    ```
 
+7. **Order Failed**
+   ```python
+   log_order_failed(broker: str, symbol: str, side: str, quantity: float,
+                    price: float, reason: str)
+   ```
+
 ## Implementation
 
 ### Broker Factory Integration
@@ -224,12 +230,47 @@ Order logs are written to `logs/trading_orders.log`. You can monitor them in rea
 tail -f logs/trading_orders.log
 ```
 
+## Telegram Notifications
+The system can be configured to send real-time order notifications to a Telegram chat. This allows for immediate updates on trading activity.
+
+### Configuration
+To enable Telegram notifications, you need to configure the settings in `config/main.yaml`:
+
+```yaml
+telegram:
+  enabled: true
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
+```
+
+- `enabled`: Set to `true` to enable notifications, `false` to disable them.
+- `bot_token`: Your Telegram bot token. It's recommended to load this from an environment variable.
+- `chat_id`: The ID of the Telegram chat where notifications will be sent.
+
+You must also set the following environment variables in your `.env` file:
+```
+TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
+TELEGRAM_CHAT_ID="your_telegram_chat_id"
+```
+
+The `OrderLogger` will automatically pick up this configuration and start sending alerts for confirmed and failed orders.
+
 ## Benefits
 1. **Centralized Logging**: All order-related events are logged in one place
 2. **Consistent Format**: Standardized log format across all brokers
 3. **Audit Trail**: Complete record of all trading activities
 4. **Debugging**: Easy to track and debug order-related issues
 5. **Analysis**: Logs can be used for performance analysis and strategy optimization
+6. **Order Modify**
+   ```python
+   log_order_modify(broker: str, symbol: str, order_id: str, 
+                   new_price: float = None, new_quantity: float = None)
+   ```
+7. **Order Failed**
+   ```python
+   log_order_failed(broker: str, symbol: str, side: str, quantity: float,
+                    price: float, reason: str)
+   ```
 
 ## Best Practices
 1. Always check if `order_logger` exists before logging
