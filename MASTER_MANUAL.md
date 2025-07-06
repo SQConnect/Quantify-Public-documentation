@@ -331,7 +331,50 @@ You can track your open positions across all accounts. The `PortfolioManager` au
 ### 6.2. Cash Management
 The system tracks cash balances in multiple currencies and provides tools for currency conversion and managing cash utilization.
 
-### 6.3. Risk Management
+### 6.3. Strategy Portfolio Access
+
+All strategies that inherit from `BaseStrategy` automatically get access to portfolio information through `self.portfolio`. This provides a simple, unified interface to query your positions and cash regardless of which broker you're using.
+
+#### Basic Usage in Strategies
+
+```python
+class MyStrategy(BaseStrategy):
+    async def run(self):
+        # Check if you own something
+        invested = await self.portfolio.is_invested("AAPL")
+        
+        # Get position size
+        size = await self.portfolio.get_position_size("AAPL")  # returns 0.0 if no position
+        
+        # Get available cash 
+        cash = await self.portfolio.get_available_cash()  # respects 5% reserve by default
+        
+        # Get portfolio summary
+        summary = await self.portfolio.get_portfolio_summary()
+```
+
+#### Available Methods
+
+**Position Info:**
+- `await self.portfolio.is_invested(symbol)` → bool
+- `await self.portfolio.position_exists(symbol)` → bool  
+- `await self.portfolio.get_position_size(symbol)` → float
+- `await self.portfolio.get_position_value(symbol)` → float
+
+**Cash Info:**
+- `await self.portfolio.get_available_cash()` → float (after reserve)
+- `await self.portfolio.get_total_cash()` → float (before reserve)
+- `await self.portfolio.get_buying_power()` → float
+
+**Advanced:**
+- `await self.portfolio.check_margin()` → dict with margin info
+- `await self.portfolio.get_currencies()` → list of currencies with balances
+- `await self.portfolio.get_options_expiration_dates(symbol)` → list of dates (if broker supports options)
+- `await self.portfolio.liquidate_portfolio(emergency=False)` → dict with liquidation results
+
+The PositionManager automatically adapts to your broker - Saxo strategies get options functionality, crypto strategies get multi-currency support, etc. All methods return sensible defaults (0.0, False, empty dict) if something goes wrong.
+
+### 6.4. Risk Management
 A key feature is the ability to define and enforce portfolio-level risk limits. These can be configured globally and include:
 - **Max Position Size**: Limit the size of any single position relative to the total portfolio value.
 - **Max Cash Utilization**: Ensure a certain percentage of cash is held in reserve.
@@ -426,4 +469,306 @@ Logs are formatted to include a timestamp, log level, the module and component n
 - **Use Component Names**: Always provide a component name to distinguish logs from different parts of the application.
 - **Log Exceptions Correctly**: When catching an exception, use `logger.error("...", exc_info=True)` to include the full stack trace.
 - **Log Strategy State**: Periodically log key information about your strategy's state, such as current position, indicator values, and P&L.
-- **Log Files**: Logs are automatically created and rotated in the `logs/` directory. 
+- **Log Files**: Logs are automatically created and rotated in the `logs/` directory.
+
+### 10.4. Enhanced Logging Features
+
+The framework now includes enhanced logging capabilities:
+
+- **Performance Logging**: Automatic performance metrics tracking with detailed P&L calculations
+- **Execution Logging**: Comprehensive order and trade execution logging
+- **Real-time Log Viewer**: CLI-based log viewer for monitoring live trading (`src/cli/log_viewer.py`)
+- **Structured Logging**: JSON-formatted logs for easier parsing and analysis
+- **Header Debugging**: Advanced broker request/response header logging for troubleshooting API issues
+
+---
+
+## 11. Command Line Interface (CLI)
+
+The Quantify framework provides comprehensive command-line interfaces for all major operations. See the dedicated [CLI Manual](cli_manual.md) for complete documentation.
+
+### 11.1. Framework CLI
+
+The main CLI through `main.py` provides:
+
+- **Framework Management**: Start, stop, and monitor the trading framework
+- **Strategy Management**: Deploy, start, stop, and restart individual strategies
+- **Interactive Mode**: Real-time monitoring and management interface
+- **Daemon Mode**: Background execution with proper process management
+- **Status Monitoring**: View framework and strategy health in real-time
+
+```bash
+# Start the framework
+python main.py start
+
+# Deploy a new strategy
+python main.py deploy-strategy --config config/strategies/my_strategy.yaml
+
+# Enter interactive mode
+python main.py interactive
+
+# Run as daemon
+python main.py start --daemon --pidfile /var/run/quantify.pid
+```
+
+### 11.2. Backtesting CLI
+
+Comprehensive backtesting capabilities through `python -m backtesting.cli`:
+
+- **Single Strategy Backtests**: Test individual strategies
+- **Strategy Comparison**: Compare multiple strategies side-by-side
+- **Walk-Forward Optimization**: Optimize parameters over time
+- **Parameter Sweeps**: Test multiple parameter combinations
+- **Portfolio Analysis**: Multi-strategy portfolio testing
+- **Performance Attribution**: Detailed performance analysis
+
+```bash
+# Run a single backtest
+python -m backtesting.cli single --strategy momentum --symbols AAPL --start-date 2023-01-01 --end-date 2023-12-31
+
+# Compare strategies
+python -m backtesting.cli compare --strategies config/strategies.json --symbols AAPL MSFT
+
+# Optimize parameters
+python -m backtesting.cli wfo --strategy momentum --parameters config/param_ranges.json
+```
+
+### 11.3. Log Viewer CLI
+
+Real-time log monitoring with filtering capabilities:
+
+```bash
+# Follow all logs
+python src/cli/log_viewer.py --follow
+
+# Filter by strategy
+python src/cli/log_viewer.py --strategy "MyStrategy" --follow
+
+# Show only errors
+python src/cli/log_viewer.py --level ERROR --follow
+```
+
+---
+
+## 12. Broker Integrations
+
+### 12.1. Saxo Bank Integration
+
+The framework includes comprehensive Saxo Bank integration with advanced features:
+
+#### Features:
+- **Multi-Asset Support**: Stocks, options, futures, forex, bonds, ETFs
+- **Real-time Data**: WebSocket-based streaming market data
+- **Options Trading**: Full options chain access and multi-leg strategy support
+- **Advanced Order Types**: Support for algorithmic orders and complex strategies
+- **Market Data Entitlements**: Proper handling of market data permissions
+- **Error Handling**: Comprehensive error handling with correlation tracking
+
+#### Configuration:
+```yaml
+broker:
+  name: "saxo"
+  config:
+    base_url: "https://gateway.saxobank.com/sim/openapi"
+    client_id: "${SAXO_CLIENT_ID}"
+    client_secret: "${SAXO_CLIENT_SECRET}"
+    refresh_token: "${SAXO_REFRESH_TOKEN}"
+```
+
+#### Key Components:
+- **SaxoBroker**: Main broker interface with WebSocket streaming
+- **SaxoOptions**: Specialized options trading handler
+- **Market Data Management**: Subscription-based real-time data
+- **Error Tracking**: X-Correlation header tracking for support
+
+#### Options Strategies:
+The Saxo integration supports complex options strategies:
+- Iron Condors
+- Calendar Spreads
+- Vertical Spreads
+- Straddles and Strangles
+- Custom multi-leg strategies
+
+See `examples/options/` for detailed implementation examples.
+
+### 12.2. Market Data Troubleshooting
+
+When experiencing market data access issues:
+
+1. **Check Entitlements**: Verify your account has the required market data subscriptions
+2. **Symbol Format**: Use the correct symbol format for each exchange
+3. **Market Hours**: Ensure markets are open for real-time data
+4. **Headers Logging**: Enhanced logging captures X-Correlation headers for support
+5. **Account Type**: Verify you're using the correct account (simulation vs live)
+
+---
+
+## 13. Database Operations and Command Processing
+
+### 13.1. Database Command System
+
+The framework includes a sophisticated command processing system that allows external control of strategies:
+
+```python
+from src.database.command_client import CommandClient
+
+# Submit a command to stop a strategy
+await client.submit_command(
+    command='stop-strategy',
+    strategy_id='MyStrategy_001',
+    parameters={'reason': 'manual_stop'}
+)
+```
+
+### 13.2. Supported Commands
+
+- **deploy-strategy**: Deploy a new strategy from configuration
+- **start-strategy**: Start a paused strategy
+- **stop-strategy**: Stop a running strategy
+- **restart-strategy**: Restart a strategy with new parameters
+- **update-params**: Update strategy parameters without restart
+
+### 13.3. Command Processing
+
+Commands are processed asynchronously by the Strategy Factory:
+- Commands are queued in the database
+- Processed in order with proper error handling
+- Results and errors are logged and stored
+- Failed commands can be retried
+
+---
+
+## 14. Performance Monitoring and Analytics
+
+### 14.1. Real-time Performance Tracking
+
+The framework provides comprehensive performance monitoring:
+
+- **P&L Tracking**: Real-time profit and loss calculations
+- **Position Monitoring**: Live position updates across all brokers
+- **Risk Metrics**: Real-time risk calculations and limit monitoring
+- **Performance Attribution**: Detailed breakdown of returns by strategy and asset
+
+### 14.2. Interactive Performance Dashboard
+
+Access through the interactive CLI mode:
+
+```bash
+python main.py interactive
+```
+
+Features:
+- Live strategy performance metrics
+- Real-time position monitoring
+- Interactive command execution
+- Log viewing and filtering
+- Health status monitoring
+
+### 14.3. Performance Data Export
+
+Export performance data for external analysis:
+- CSV exports for spreadsheet analysis
+- JSON exports for programmatic access
+- Database queries for custom reporting
+- Integration with external monitoring systems
+
+---
+
+## 15. Troubleshooting and Support
+
+### 15.1. Common Issues
+
+**Market Data Access:**
+- Verify broker entitlements and permissions
+- Check symbol format and exchange codes
+- Ensure proper authentication credentials
+- Review market hours and data availability
+
+**Strategy Deployment:**
+- Validate YAML configuration syntax
+- Check required parameters and dependencies
+- Verify broker connectivity
+- Review log files for specific errors
+
+**Performance Issues:**
+- Monitor resource usage (CPU, memory)
+- Check database performance and optimization
+- Review network connectivity and latency
+- Optimize strategy logic and data handling
+
+### 15.2. Debugging Tools
+
+- **Enhanced Logging**: Comprehensive logging with correlation tracking
+- **Log Viewer**: Real-time log monitoring and filtering
+- **Interactive Mode**: Live debugging and command execution
+- **Performance Profiling**: Built-in performance monitoring
+- **Database Inspector**: Direct database query capabilities
+
+### 15.3. Getting Support
+
+When contacting broker support or debugging issues:
+- Include X-Correlation headers from logs
+- Provide specific timestamps and error messages
+- Include relevant configuration details
+- Use the enhanced logging for detailed error tracking
+
+---
+
+## 16. Best Practices and Recommendations
+
+### 16.1. Development Workflow
+
+1. **Use Configuration Templates**: Generate configurations using the CLI tools
+2. **Validate Before Deploy**: Always validate configurations before deployment
+3. **Test with Backtesting**: Thoroughly test strategies before live deployment
+4. **Monitor Performance**: Use real-time monitoring during live trading
+5. **Implement Proper Risk Management**: Define and enforce risk limits
+6. **Use Version Control**: Track configuration and strategy changes
+7. **Regular Monitoring**: Use the interactive CLI for ongoing monitoring
+
+### 16.2. Production Deployment
+
+1. **Daemon Mode**: Run the framework as a daemon in production
+2. **Process Management**: Use proper PID files and signal handling
+3. **Log Rotation**: Configure appropriate log rotation and retention
+4. **Monitoring Setup**: Implement external monitoring and alerting
+5. **Backup Strategy**: Regular database and configuration backups
+6. **Disaster Recovery**: Plan for system failure scenarios
+
+### 16.3. Security Considerations
+
+1. **API Key Management**: Use environment variables for sensitive data
+2. **Access Control**: Limit database and system access
+3. **Network Security**: Secure network connections and API endpoints
+4. **Audit Logging**: Maintain comprehensive audit trails
+5. **Regular Updates**: Keep dependencies and systems updated
+
+---
+
+## 17. Additional Resources
+
+### 17.1. Documentation
+
+- **[CLI Manual](cli_manual.md)**: Comprehensive CLI reference
+- **[Options Framework Manual](options_framework_manual.md)**: Options trading guide
+- **[Strategy Guide](strategy_guide.md)**: Strategy development reference
+- **[Brokers Manual](brokers.md)**: Broker integration guide
+- **[Configuration Guide](configuration.md)**: Configuration reference
+
+### 17.2. Examples
+
+The `examples/` directory contains:
+- Options strategy implementations
+- Futures trading examples
+- Machine learning strategy examples
+- Backtesting workflow examples
+- Configuration templates
+
+### 17.3. Support Resources
+
+- Framework documentation in `docs/`
+- Example configurations in `config/`
+- Test cases for reference implementations
+- Community discussions and support forums
+
+This master manual provides a comprehensive overview of the Quantify Trading Framework. For specific implementation details, refer to the specialized manuals and example code in the framework repository. 

@@ -163,11 +163,39 @@ except ConfigurationError as e:
 
 ## Configuration File Structure
 
-The default configuration is defined in `src/core/config/settings.py`. You can override these settings by:
+The configuration is defined in YAML files, primarily `config/main.yaml`. The configuration hierarchy is:
 
-1. Setting environment variables
-2. Using the `set` or `update` methods
-3. Creating a custom configuration file
+1. **Base configuration**: Loaded from `config/main.yaml`
+2. **Environment variables**: Override YAML settings using `${ENV_VAR}` syntax
+3. **Runtime overrides**: Using the `set` or `update` methods
+
+### YAML Configuration Format
+
+The main configuration file uses YAML format with sections for different components:
+
+```yaml
+# config/main.yaml
+broker:
+  Saxo:
+    client_id: "${SAXO_API_KEY}"
+    client_secret: "${SAXO_API_SECRET}"
+    base_url: "https://gateway.saxobank.com/sim/openapi"
+
+trading:
+  default_timeframe: "1h"
+  default_commission: 0.001
+  max_position_size: 0.1
+
+strategy:
+  ma_crossover:
+    fast_period: 10
+    slow_period: 20
+    risk_per_trade: 0.02
+```
+
+### Environment Variable Resolution
+
+Environment variables are automatically resolved using the `${ENV_VAR}` syntax in YAML files.
 
 ## Security Considerations
 

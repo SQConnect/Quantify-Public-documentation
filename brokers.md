@@ -1,49 +1,297 @@
 # Broker Documentation
 
-This document provides comprehensive documentation for all brokers available in our library.
+This document provides comprehensive documentation for all brokers available in the Quantify trading system.
 
 ## Table of Contents
 1. [Overview](#overview)
 2. [Broker Factory](#broker-factory)
-3. [Kraken Broker](#kraken-broker)
-4. [Saxo Broker](#saxo-broker)
+3. [Saxo Broker](#saxo-broker)
+4. [Kraken Broker](#kraken-broker)
 5. [Interactive Brokers](#interactive-brokers)
 6. [Binance Broker](#binance-broker)
-7. [Mock Broker](#mock-broker)
-8. [Common Operations](#common-operations)
-9. [Best Practices](#best-practices)
+7. [Backtest Broker](#backtest-broker)
+8. [Mock Broker](#mock-broker)
+9. [Common Operations](#common-operations)
+10. [Best Practices](#best-practices)
 
 ## Overview
 
-Our broker system provides a unified interface for interacting with different cryptocurrency exchanges. Each broker implements the same interface, making it easy to switch between different exchanges or use multiple exchanges simultaneously.
+Our broker system provides a unified interface for interacting with different financial exchanges and brokers. Each broker implements the same interface, making it easy to switch between different brokers or use multiple brokers simultaneously. All brokers support:
+
+- **Equity Trading**: Market and limit orders for stocks/ETFs
+- **Options Trading**: Single leg and multi-leg options strategies  
+- **Market Data**: Real-time quotes, historical candles, order book
+- **Portfolio Management**: Positions, account summary, holdings
+- **Event-Driven Architecture**: Real-time market data and order updates
 
 ## Broker Factory
 
-The `BrokerFactory` is used to create broker instances. It handles the configuration and initialization of different broker types.
+The `BrokerFactory` creates broker instances with proper configuration and initialization.
 
 ### Usage
 ```python
 from src.broker_interface.broker_factory import BrokerFactory
+from src.core.config.config_manager import ConfigManager
 
-# Create broker configuration
-broker_config = {
-    'config': {
-        'api_key': 'your_api_key',
-        'api_secret': 'your_api_secret',
-        'testnet': True,  # Use testnet/paper trading
-        'paper_trading': True,  # Enable paper trading
-        'base_url': 'https://api.kraken.com',
-        'ws_url': 'wss://ws.kraken.com'
-    }
-}
+# Load configuration
+config_manager = ConfigManager()
+broker_config = config_manager.get_broker_config('saxo')
 
 # Create broker instance
-broker = BrokerFactory.create_broker('kraken', broker_config)
+broker = BrokerFactory.create_broker('saxo', broker_config)
+
+# Connect and start trading
+await broker.connect()
+```
+
+## Saxo Broker
+
+The Saxo broker provides comprehensive access to Saxo Bank's trading platform, supporting stocks, options, forex, commodities, and more. **This is our most advanced broker implementation with production-ready features.**
+
+### 🚀 **Key Features**
+- ✅ **Auto Token Refresh**: Automatic background token refresh (checks every minute, refreshes 5 minutes before expiry)
+- ✅ **WebSocket Auto-Reconnection**: Smart reconnection with exponential backoff and subscription restoration
+- ✅ **Comprehensive Options Support**: 25+ strategy types, multi-leg orders, real-time Greeks
+- ✅ **Market Data Handling**: Supports both live and indicative prices (market closed scenarios)
+- ✅ **Production Error Handling**: Robust error handling, validation, and logging
+- ✅ **Portfolio Management**: Complete position tracking, account summaries, holdings
+
+### Configuration
+```python
+# Environment variables (.env file)
+SAXO_API_KEY=your_api_key
+SAXO_API_SECRET=your_api_secret
+SAXO_REFRESH_TOKEN=your_refresh_token  # Auto-saved after first login
+
+# Broker configuration
+saxo_config = {
+    'config': {
+        'environment': 'demo',  # 'demo' or 'live'
+        'base_url': 'https://gateway.saxobank.com/sim/openapi',
+        'ws_url': 'wss://streaming.saxobank.com/sim/openapi/streamingws/connect',
+        'token_refresh_buffer_minutes': 5,  # Refresh 5 minutes before expiry
+        'heartbeat_interval': 30,  # WebSocket heartbeat
+        'max_reconnect_attempts': 10
+    }
+}
+```
+
+### Connection & Authentication
+```python
+# Connect with automatic token management
+await broker.connect()
+
+# Connection automatically handles:
+# - Token refresh (background monitoring)
+# - WebSocket reconnection
+# - Subscription restoration
+# - Account key caching
+
+# Check connection status
+is_connected = broker.is_connected
+```
+
+### Equity Trading
+```python
+from decimal import Decimal
+
+# Place market order
+market_order = await broker.place_order(
+    symbol="NVDA:xnas",
+    order_type="Market",
+    side="Buy",
+    quantity=Decimal("100")
+)
+
+# Place limit order with time in force
+limit_order = await broker.place_order(
+    symbol="NVDA:xnas",
+    order_type="Limit",
+    side="Sell", 
+    quantity=Decimal("100"),
+    price=Decimal("850.00"),
+    time_in_force="GTC"  # GTC, DAY, FOK, IOC
+)
+
+# Cancel order
+cancelled = await broker.cancel_order(order_id="12345")
+```
+
+### Options Trading
+
+#### Single Leg Options
+```python
+from src.options.option_leg import OptionLeg
+from src.options.option_types import OptionType
+
+# Get options chain
+chain = await broker.get_options_chain("NVDA:xnas", datetime(2024, 12, 20))
+
+# Find specific option
+nvda_call = chain.get_leg_by_strike(850.0, OptionType.CALL)
+
+# Place option order
+option_order = await broker.place_option_order(
+    option_leg=nvda_call,
+    side="Buy",
+    quantity=1,
+    order_type="Limit",
+    price=25.50
+)
+```
+
+#### Multi-Leg Strategy Orders
+```python
+# Create put spread legs
+legs = [
+    {"leg": put_sell_leg, "side": "Sell", "quantity": 1},
+    {"leg": put_buy_leg, "side": "Buy", "quantity": 1}
+]
+
+# Place multi-leg order at net credit
+spread_order = await broker.place_multi_leg_order(
+    legs=legs,
+    order_type="Limit",
+    price=2.50  # Net credit
+)
+```
+
+#### Strategy Factory (25+ Strategies)
+```python
+# Access comprehensive strategy factory
+saxo_options = broker.saxo_options
+
+# Create vertical spread
+strategy = await saxo_options.create_option_strategy(
+    strategy_type="BullCallSpread",
+    underlying="NVDA:xnas",
+    expiry=datetime(2024, 12, 20),
+    long_strike=800.0,
+    short_strike=850.0,
+    quantity=1
+)
+
+# Available strategies include:
+# Vertical Spreads: BullCallSpread, BearPutSpread, etc.
+# Volatility: LongStraddle, ShortStrangle, IronCondor
+# Calendar: CalendarSpread, DiagonalSpread
+# Exotic: ButterflySpread, CondorSpread, JadeeLizard
+# And 15+ more...
+```
+
+### Market Data
+```python
+# Get current market data (handles indicative prices)
+market_data = await broker.get_market_data("NVDA:xnas")
+# Returns: {
+#   'price': 845.20,
+#   'bid': 845.10,
+#   'ask': 845.30,
+#   'market_state': 'Open',  # or 'Closed'
+#   'is_indicative': False,  # True if market closed
+#   'timestamp': datetime(...)
+# }
+
+# Subscribe to real-time market data
+async def on_tick(payload):
+    print(f"Real-time price: {payload}")
+
+await broker.subscribe_to_market_data("NVDA:xnas", on_tick)
+
+# Get historical OHLC data with proper candle integration
+candles = await broker.get_ohlc_data(
+    symbol="NVDA:xnas",
+    timeframe="1h",
+    count=100
+)
+```
+
+### Portfolio Management
+```python
+# Get comprehensive account summary
+account = await broker.get_account_summary()
+# Returns: {
+#   'account_id': 'ABCD1234',
+#   'currency': 'USD', 
+#   'cash_balance': 50000.0,
+#   'net_liquidation_value': 75000.0,
+#   'total_equity': 75000.0,
+#   'buying_power': 100000.0,
+#   'day_pnl': 1250.0,
+#   'total_pnl': 5000.0
+# }
+
+# Get all positions with enhanced data
+positions = await broker.get_positions()
+# Each position includes:
+# - symbol, quantity, avg_price, market_price
+# - market_value, unrealized_pnl, currency
+# - direction, asset_type, exchange
+
+# Get option positions specifically
+option_positions = await broker.get_option_positions()
+
+# Get account holdings (detailed breakdown)
+holdings = await broker.get_account_holdings()
+```
+
+### Advanced Features
+
+#### Real-time Greeks Subscription
+```python
+from src.core.events import event_manager, GreeksEvent
+
+# Event handler for Greeks updates
+async def on_greeks_update(event: GreeksEvent):
+    print(f"Greeks for {event.symbol}: Delta={event.delta}, Vega={event.vega}")
+
+# Subscribe to event
+event_manager.subscribe(GreeksEvent, on_greeks_update)
+
+# Subscribe to specific option's Greeks
+await broker.subscribe_to_greeks(option_leg)
+```
+
+#### Order Event Monitoring
+```python
+from src.core.events import OrderEvent
+
+async def on_order_update(event: OrderEvent):
+    order = event.order
+    print(f"Order {order.order_id}: {order.status}")
+
+event_manager.subscribe(OrderEvent, on_order_update)
+await broker.subscribe_to_orders()
+```
+
+#### Connection Monitoring
+```python
+# Background tasks automatically handle:
+# - Token refresh monitoring (every minute)
+# - WebSocket heartbeat monitoring  
+# - Auto-reconnection with exponential backoff
+# - Subscription restoration after reconnection
+
+# Manual connection check
+if not broker.is_connected:
+    await broker.connect()
+```
+
+### Error Handling
+```python
+from src.core.exceptions import BrokerError, OrderError, MarketDataError
+
+try:
+    order = await broker.place_order(...)
+except OrderError as e:
+    print(f"Order failed: {e}")
+except BrokerError as e:
+    print(f"Broker error: {e}")
 ```
 
 ## Kraken Broker
 
-The Kraken broker provides access to the Kraken cryptocurrency exchange.
+The Kraken broker provides access to the Kraken cryptocurrency exchange with both live and paper trading support.
 
 ### Configuration
 ```python
@@ -51,7 +299,6 @@ kraken_config = {
     'config': {
         'api_key': 'your_api_key',
         'api_secret': 'your_api_secret',
-        'testnet': True,  # Use testnet
         'paper_trading': True,  # Enable paper trading
         'base_url': 'https://api.kraken.com',
         'ws_url': 'wss://ws.kraken.com'
@@ -59,374 +306,29 @@ kraken_config = {
 }
 ```
 
-### Connection
-```python
-# Connect to Kraken
-await broker.connect()
-
-# Check connection status
-is_connected = broker.is_connected()
-```
-
-### Market Data
-```python
-# Subscribe to market data
-async def on_market_data(event):
-    print(f"Received market data: {event.data}")
-
-await broker.subscribe_to_market_data("XBT/USD", on_market_data)
-
-# Get current price
-price = await broker.get_current_price("XBT/USD")
-
-# Get order book
-order_book = await broker.get_order_book("XBT/USD")
-```
-
 ### Trading
 ```python
-# Place a market order
-order = await broker.place_market_order(
-    symbol="XBT/USD",
-    side="buy",
-    quantity=0.1
+# Place orders (same interface as other brokers)
+order = await broker.place_order(
+    symbol="XBTUSD",
+    order_type="Limit",
+    side="Buy",
+    quantity=Decimal("0.1"),
+    price=Decimal("45000.0")
 )
-
-# Place a limit order
-order = await broker.place_limit_order(
-    symbol="XBT/USD",
-    side="sell",
-    quantity=0.1,
-    price=50000.0
-)
-
-# Cancel an order
-await broker.cancel_order(order_id="order_123")
-
-# Get order status
-order_status = await broker.get_order_status(order_id="order_123")
-```
-
-### Account Management
-```python
-# Get account balance
-balance = await broker.get_balance()
-
-# Get positions
-positions = await broker.get_positions()
-
-# Get account summary
-summary = await broker.get_account_summary()
-```
-
-## Saxo Broker
-
-The Saxo broker provides access to Saxo Bank's trading platform, supporting stocks, forex, commodities, and more.
-
-### Configuration
-```python
-saxo_config = {
-    'config': {
-        'api_key': 'your_api_key',
-        'api_secret': 'your_api_secret',
-        'environment': 'demo',  # 'demo' or 'live'
-        'base_url': 'https://gateway.saxobank.com/sim/openapi',
-        'ws_url': 'wss://streaming.saxobank.com/sim/openapi/streamingws/connect'
-    }
-}
-```
-
-### Connection
-```python
-# Connect to Saxo
-await broker.connect()
-
-# Check connection status
-is_connected = broker.is_connected()
-```
-
-### Market Data
-```python
-# Subscribe to market data
-async def on_market_data(event):
-    print(f"Received market data: {event.data}")
-
-await broker.subscribe_to_market_data("EURUSD", on_market_data)
-
-# Get current price
-price = await broker.get_current_price("EURUSD")
-
-# Get order book
-order_book = await broker.get_order_book("EURUSD")
-```
-
-### Trading
-```python
-# Place a market order
-order = await broker.place_market_order(
-    symbol="EURUSD",
-    side="buy",
-    quantity=1000,
-    asset_type="forex"
-)
-
-# Place a limit order
-order = await broker.place_limit_order(
-    symbol="EURUSD",
-    side="sell",
-    quantity=1000,
-    price=1.1000,
-    asset_type="forex"
-)
-
-# Cancel an order
-await broker.cancel_order(order_id="order_123")
-```
-
-### Account Management
-```python
-# Get account balance
-balance = await broker.get_balance()
-
-# Get positions
-positions = await broker.get_positions()
-
-# Get account summary
-summary = await broker.get_account_summary()
 ```
 
 ## Interactive Brokers
 
-The Interactive Brokers (IB) broker provides access to IB's trading platform, supporting stocks, options, futures, and more.
+The Interactive Brokers (IB) broker provides access to IB's platform via the TWS API.
 
-### Configuration
+### Configuration  
 ```python
 ib_config = {
     'config': {
         'host': '127.0.0.1',
         'port': 7497,  # 7496 for TWS, 7497 for IB Gateway
         'client_id': 1,
-        'paper_trading': True,
-        'timeout': 20
-    }
-}
-```
-
-### Connection
-```python
-# Connect to Interactive Brokers
-await broker.connect()
-
-# Check connection status
-is_connected = broker.is_connected()
-```
-
-### Market Data
-```python
-# Subscribe to market data
-async def on_market_data(event):
-    print(f"Received market data: {event.data}")
-
-await broker.subscribe_to_market_data("AAPL", on_market_data)
-
-# Get current price
-price = await broker.get_current_price("AAPL")
-
-# Get order book
-order_book = await broker.get_order_book("AAPL")
-```
-
-### Trading
-```python
-# Place a market order
-order = await broker.place_market_order(
-    symbol="AAPL",
-    side="buy",
-    quantity=100,
-    asset_type="stock"
-)
-
-# Place a limit order
-order = await broker.place_limit_order(
-    symbol="AAPL",
-    side="sell",
-    quantity=100,
-    price=150.0,
-    asset_type="stock"
-)
-
-# Place an option order
-option_order = await broker.place_option_order(
-    symbol="AAPL",
-    side="buy",
-    quantity=1,
-    strike=150.0,
-    expiration="2024-12-20",
-    option_type="call"
-)
-
-# Cancel an order
-await broker.cancel_order(order_id="order_123")
-```
-
-### Account Management
-```python
-# Get account balance
-balance = await broker.get_balance()
-
-# Get positions
-positions = await broker.get_positions()
-
-# Get account summary
-summary = await broker.get_account_summary()
-```
-
-## Binance Broker
-
-The Binance broker provides access to the Binance cryptocurrency exchange.
-
-### Configuration
-```python
-binance_config = {
-    'config': {
-        'api_key': 'your_api_key',
-        'api_secret': 'your_api_secret',
-        'testnet': True,  # Use testnet
-        'paper_trading': True,  # Enable paper trading
-        'base_url': 'https://api.binance.com',
-        'ws_url': 'wss://stream.binance.com:9443/ws'
-    }
-}
-```
-
-### Connection
-```python
-# Connect to Binance
-await broker.connect()
-
-# Check connection status
-is_connected = broker.is_connected()
-```
-
-### Market Data
-```python
-# Subscribe to market data
-async def on_market_data(event):
-    print(f"Received market data: {event.data}")
-
-await broker.subscribe_to_market_data("BTCUSDT", on_market_data)
-
-# Get current price
-price = await broker.get_current_price("BTCUSDT")
-
-# Get order book
-order_book = await broker.get_order_book("BTCUSDT")
-
-# Get klines/candlestick data
-klines = await broker.get_klines(
-    symbol="BTCUSDT",
-    interval="1h",
-    limit=100
-)
-```
-
-### Trading
-```python
-# Place a market order
-order = await broker.place_market_order(
-    symbol="BTCUSDT",
-    side="buy",
-    quantity=0.1
-)
-
-# Place a limit order
-order = await broker.place_limit_order(
-    symbol="BTCUSDT",
-    side="sell",
-    quantity=0.1,
-    price=50000.0
-)
-
-# Place a stop-limit order
-order = await broker.place_stop_limit_order(
-    symbol="BTCUSDT",
-    side="sell",
-    quantity=0.1,
-    price=45000.0,
-    stop_price=46000.0
-)
-
-# Cancel an order
-await broker.cancel_order(order_id="order_123")
-
-# Cancel all open orders
-await broker.cancel_all_orders(symbol="BTCUSDT")
-```
-
-### Account Management
-```python
-# Get account balance
-balance = await broker.get_balance()
-
-# Get positions
-positions = await broker.get_positions()
-
-# Get account summary
-summary = await broker.get_account_summary()
-
-# Get trading fees
-fees = await broker.get_trading_fees()
-```
-
-### Special Features
-
-1. **Futures Trading**
-```python
-# Switch to futures trading
-await broker.use_futures()
-
-# Place a futures order
-futures_order = await broker.place_futures_order(
-    symbol="BTCUSDT",
-    side="buy",
-    quantity=0.1,
-    leverage=10
-)
-```
-
-2. **Margin Trading**
-```python
-# Enable margin trading
-await broker.enable_margin()
-
-# Place a margin order
-margin_order = await broker.place_margin_order(
-    symbol="BTCUSDT",
-    side="buy",
-    quantity=0.1,
-    is_isolated=True
-)
-```
-
-3. **WebSocket Streams**
-```python
-# Subscribe to multiple streams
-await broker.subscribe_to_streams([
-    "btcusdt@trade",
-    "btcusdt@depth",
-    "btcusdt@kline_1m"
-], on_market_data)
-```
-
-## Mock Broker
-
-The Mock Broker is used for testing and paper trading. It simulates exchange behavior without making actual trades.
-
-### Configuration
-```python
-mock_config = {
-    'config': {
-        'initial_balance': 100000.0,  # Initial paper trading balance
         'paper_trading': True
     }
 }
@@ -434,228 +336,180 @@ mock_config = {
 
 ### Usage
 ```python
-# Create mock broker
-broker = BrokerFactory.create_broker('mock', mock_config)
-
-# Connect (no actual connection needed)
+# Same unified interface
 await broker.connect()
+order = await broker.place_order(
+    symbol="AAPL",
+    order_type="Market",
+    side="Buy", 
+    quantity=Decimal("100")
+)
+```
 
-# Use the same interface as real brokers
-await broker.place_market_order(...)
-await broker.get_balance()
+## Binance Broker
+
+The Binance broker provides access to Binance cryptocurrency exchange.
+
+### Configuration
+```python
+binance_config = {
+    'config': {
+        'api_key': 'your_api_key',
+        'api_secret': 'your_api_secret',
+        'testnet': True,
+        'base_url': 'https://api.binance.com'
+    }
+}
+```
+
+### Special Features
+```python
+# Cryptocurrency-specific features
+klines = await broker.get_klines(
+    symbol="BTCUSDT", 
+    interval="1h",
+    limit=100
+)
+
+# Futures trading
+await broker.use_futures()
+futures_order = await broker.place_futures_order(...)
+```
+
+## Backtest Broker
+
+The Backtest broker simulates trading for backtesting strategies.
+
+### Configuration
+```python
+backtest_config = {
+    'config': {
+        'initial_balance': 100000.0,
+        'commission': 0.001,  # 0.1% commission
+        'slippage': 0.0001   # 0.01% slippage
+    }
+}
+```
+
+### Usage
+```python
+# Set historical data
+broker.set_current_time(datetime(2024, 1, 1))
+broker.load_historical_data(data)
+
+# Same trading interface
+order = await broker.place_order(...)
+```
+
+## Mock Broker
+
+The Mock broker is used for testing without any real trading.
+
+### Configuration
+```python
+mock_config = {
+    'config': {
+        'initial_balance': 100000.0,
+        'paper_trading': True
+    }
+}
 ```
 
 ## Common Operations
 
-### Market Data Subscription
+### Universal Broker Interface
+
+All brokers implement the same interface defined in `BaseBroker`:
+
 ```python
-async def on_market_data(event):
-    """Handle market data events"""
-    if event.event_type == MarketDataEventType.TICK:
-        print(f"Price: {event.data['price']}")
-    elif event.event_type == MarketDataEventType.TRADE:
-        print(f"Trade: {event.data}")
+# Connection
+await broker.connect()
+await broker.disconnect()
 
-# Subscribe to market data
-await broker.subscribe_to_market_data("XBT/USD", on_market_data)
-```
+# Trading
+order = await broker.place_order(symbol, order_type, side, quantity, price, time_in_force)
+success = await broker.cancel_order(order_id)
 
-### Order Management
-```python
-# Place different types of orders
-market_order = await broker.place_market_order(
-    symbol="XBT/USD",
-    side="buy",
-    quantity=0.1
-)
+# Market Data  
+data = await broker.get_market_data(symbol)
+await broker.subscribe_to_market_data(symbol, callback)
 
-limit_order = await broker.place_limit_order(
-    symbol="XBT/USD",
-    side="sell",
-    quantity=0.1,
-    price=50000.0
-)
-
-stop_order = await broker.place_stop_order(
-    symbol="XBT/USD",
-    side="sell",
-    quantity=0.1,
-    stop_price=45000.0
-)
-
-# Modify an order
-modified_order = await broker.modify_order(
-    order_id="order_123",
-    new_quantity=0.2,
-    new_price=51000.0
-)
-
-# Cancel an order
-await broker.cancel_order(order_id="order_123")
-```
-
-### Position Management
-```python
-# Get current positions
+# Portfolio
 positions = await broker.get_positions()
+summary = await broker.get_account_summary()
+holdings = await broker.get_account_holdings()
 
-# Close a position
-await broker.close_position(symbol="XBT/USD")
+# Options (if supported)
+chain = await broker.get_options_chain(underlying, expiry)
+order = await broker.place_option_order(option_leg, side, quantity, order_type, price)
+order = await broker.place_multi_leg_order(legs, order_type, price)
+```
 
-# Get position details
-position = await broker.get_position(symbol="XBT/USD")
+### Event System Integration
+
+All brokers integrate with the event system:
+
+```python
+from src.core.events import event_manager, MarketDataEvent, OrderEvent
+
+# Subscribe to events
+event_manager.subscribe(MarketDataEvent, your_handler)
+event_manager.subscribe(OrderEvent, your_order_handler)
+```
+
+### Error Handling Best Practices
+
+```python
+from src.core.exceptions import BrokerError, ConnectionError, OrderError
+
+try:
+    await broker.connect()
+    order = await broker.place_order(...)
+except ConnectionError:
+    print("Failed to connect to broker")
+except OrderError as e:
+    print(f"Order rejected: {e}")
+except BrokerError as e:
+    print(f"General broker error: {e}")
 ```
 
 ## Best Practices
 
-1. **Error Handling**
-   ```python
-   try:
-       await broker.place_market_order(...)
-   except BrokerError as e:
-       logger.error(f"Order placement failed: {e}")
-   ```
+### 1. Configuration Management
+- Store sensitive credentials in environment variables
+- Use the `ConfigManager` for centralized configuration
+- Never hardcode API keys in source code
 
-2. **Connection Management**
-   ```python
-   # Always check connection before operations
-   if not broker.is_connected():
-       await broker.connect()
-   
-   # Handle disconnections
-   async def on_disconnect():
-       logger.warning("Broker disconnected, attempting to reconnect...")
-       await broker.connect()
-   ```
+### 2. Connection Management
+- Always check `broker.is_connected` before trading
+- Use try/finally blocks to ensure proper disconnection
+- Let automatic reconnection handle temporary disconnects
 
-3. **Rate Limiting**
-   ```python
-   # Implement rate limiting for API calls
-   async def place_order_with_retry(*args, **kwargs):
-       max_retries = 3
-       for attempt in range(max_retries):
-           try:
-               return await broker.place_market_order(*args, **kwargs)
-           except RateLimitError:
-               await asyncio.sleep(1 * (attempt + 1))
-   ```
+### 3. Order Management
+- Use `Decimal` for all price and quantity values
+- Validate orders before submission
+- Monitor order events for execution updates
+- Implement proper position sizing
 
-4. **Order Validation**
-   ```python
-   # Validate orders before placement
-   def validate_order(symbol, side, quantity, price=None):
-       if quantity <= 0:
-           raise ValueError("Quantity must be positive")
-       if price is not None and price <= 0:
-           raise ValueError("Price must be positive")
-       # Add more validation as needed
-   ```
+### 4. Error Handling
+- Catch specific exceptions (OrderError, ConnectionError)
+- Implement retry logic for transient errors  
+- Log all errors with context for debugging
 
-5. **Paper Trading**
-   ```python
-   # Always test strategies in paper trading first
-   broker_config = {
-       'config': {
-           'paper_trading': True,
-           'initial_balance': 100000.0
-       }
-   }
-   ```
+### 5. Performance
+- Cache market data when possible
+- Use async/await properly for concurrent operations
+- Batch operations when supported by the broker
 
-6. **Logging and Monitoring**
-   ```python
-   # Log all important operations
-   logger.info(f"Placing order: {order_details}")
-   logger.info(f"Order placed: {order_id}")
-   logger.info(f"Order filled: {fill_details}")
-   ```
+### 6. Testing
+- Use Mock broker for unit tests
+- Use Backtest broker for strategy validation
+- Test with paper trading before live deployment
 
-## Example Strategy Integration
+### 7. Options Trading
+- Always validate option chains before trading
+- Monitor Greeks for risk management
+- Use multi-leg orders for complex strategies
+- Implement assignment checking for short options
 
-Here's an example of how to integrate a broker with a trading strategy:
-
-```python
-class TradingStrategy:
-    def __init__(self, broker_config):
-        self.broker = BrokerFactory.create_broker('kraken', broker_config)
-        
-    async def initialize(self):
-        await self.broker.connect()
-        await self.broker.subscribe_to_market_data("XBT/USD", self.on_market_data)
-        
-    async def on_market_data(self, event):
-        if event.event_type == MarketDataEventType.TICK:
-            # Implement your trading logic here
-            if self.should_buy(event.data['price']):
-                await self.place_buy_order()
-                
-    async def place_buy_order(self):
-        try:
-            order = await self.broker.place_market_order(
-                symbol="XBT/USD",
-                side="buy",
-                quantity=0.1
-            )
-            logger.info(f"Buy order placed: {order}")
-        except BrokerError as e:
-            logger.error(f"Failed to place buy order: {e}")
-            
-    def should_buy(self, price):
-        # Implement your buy signal logic
-        pass
-```
-
-## Error Handling
-
-Common broker errors and how to handle them:
-
-1. **Connection Errors**
-   ```python
-   try:
-       await broker.connect()
-   except ConnectionError as e:
-       logger.error(f"Failed to connect: {e}")
-       # Implement reconnection logic
-   ```
-
-2. **Order Errors**
-   ```python
-   try:
-       await broker.place_market_order(...)
-   except InsufficientFundsError:
-       logger.error("Insufficient funds for order")
-   except InvalidOrderError:
-       logger.error("Invalid order parameters")
-   except RateLimitError:
-       logger.error("Rate limit exceeded")
-   ```
-
-3. **Market Data Errors**
-   ```python
-   try:
-       await broker.subscribe_to_market_data(...)
-   except SubscriptionError as e:
-       logger.error(f"Failed to subscribe: {e}")
-   ```
-
-## Performance Considerations
-
-1. **WebSocket Usage**
-   - Use WebSocket connections for real-time data
-   - Implement heartbeat mechanisms
-   - Handle reconnection automatically
-
-2. **API Rate Limits**
-   - Implement rate limiting
-   - Use batch operations when possible
-   - Cache frequently accessed data
-
-3. **Memory Management**
-   - Clear old market data
-   - Limit order history
-   - Implement proper cleanup
-
-4. **Error Recovery**
-   - Implement automatic reconnection
-   - Retry failed operations
-   - Maintain state consistency 
+This unified broker system provides the foundation for all trading operations in the Quantify framework, ensuring consistent behavior across different financial markets and exchanges. 

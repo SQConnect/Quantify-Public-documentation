@@ -2,355 +2,469 @@
 
 ## Table of Contents
 1. [Introduction](#introduction)
-2. [Portfolio Structure](#portfolio-structure)
-3. [Account Management](#account-management)
+2. [PositionManager Overview](#positionmanager-overview)
+3. [Initialization](#initialization)
 4. [Position Management](#position-management)
 5. [Cash Management](#cash-management)
-6. [Risk Management](#risk-management)
-7. [Multi-Currency Support](#multi-currency-support)
-8. [Portfolio Monitoring](#portfolio-monitoring)
-9. [Best Practices](#best-practices)
-10. [Examples](#examples)
+6. [Margin Information](#margin-information)
+7. [Portfolio Summary](#portfolio-summary)
+8. [Multi-Currency Support](#multi-currency-support)
+9. [Options Support](#options-support)
+10. [Portfolio Liquidation](#portfolio-liquidation)
+11. [Caching and Performance](#caching-and-performance)
+12. [Best Practices](#best-practices)
+13. [Examples](#examples)
 
 ## Introduction
 
-The portfolio management system provides a unified interface for managing positions, cash, and risk across all asset classes. It supports multiple brokers and provides comprehensive tools for portfolio monitoring and risk management.
+The PositionManager provides a unified interface for strategies to interact with portfolio data across any broker. It handles position tracking, cash management, margin monitoring, and provides comprehensive portfolio summaries. The class works with the unified broker interface, making it broker-agnostic.
 
-## Portfolio Structure
+**Note**: Risk management functionality is handled separately and will be integrated as a standalone component.
 
-The portfolio system is organized into several key components:
+## PositionManager Overview
+
+The PositionManager is the core class for portfolio operations:
 
 ```python
-from src.portfolio.portfolio import Portfolio
+from src.portfolio.position_manager import PositionManager
+from src.broker_interface.broker_factory import BrokerFactory
 
-# Initialize portfolio manager
-portfolio = Portfolio(
-    broker_accounts={
-        'kraken': kraken_broker,
-        'saxo': saxo_broker
-    },
-    risk_limits={
-        'max_position_size': 0.1,  # 10% of portfolio
-        'max_cash_utilization': 0.8,  # 80% of available cash
-        'min_cash_reserve': 0.2,  # 20% cash reserve
-        'max_leverage': 2.0,  # 2x leverage
-        'max_drawdown': 0.15  # 15% max drawdown
-    }
+# Initialize broker (any supported broker)
+broker = BrokerFactory.create_broker('binance', config)
+
+# Initialize PositionManager
+position_manager = PositionManager(
+    broker=broker,
+    cash_reserve_percentage=0.05,  # 5% cash reserve
+    max_position_percentage=0.10   # 10% max position size
 )
 ```
 
-### Key Components
+### Key Features
 
-1. **Broker Accounts**
-   - Multiple broker support
-   - Unified interface for all brokers
-   - Automatic synchronization
+- **Broker Agnostic**: Works with any broker from BrokerFactory
+- **Unified Interface**: Same API across all brokers
+- **Performance Optimized**: Built-in caching with configurable TTL
+- **Multi-Currency**: Support for multiple currencies
+- **Options Ready**: Built-in options support
+- **Emergency Features**: Portfolio liquidation capabilities
 
-2. **Risk Limits**
-   - Position size limits
-   - Cash utilization limits
-   - Leverage limits
-   - Drawdown limits
+## Initialization
 
-## Account Management
-
-### Account Summary
-
-Get a complete overview of your accounts across all brokers:
+### Basic Initialization
 
 ```python
-# Get account summary
-summary = await portfolio.get_account_summary()
+from src.portfolio.position_manager import PositionManager
 
-# Access key metrics
-total_equity = summary['total_equity']
-total_margin_used = summary['total_margin_used']
-available_margin = summary['available_margin']
-margin_utilization = summary['margin_utilization']
+# Minimal initialization
+position_manager = PositionManager(broker=broker)
 
-# Access broker-specific information
-for broker, account in summary['accounts'].items():
-    broker_equity = account['equity']
-    broker_margin = account['margin_used']
+# With custom settings
+position_manager = PositionManager(
+    broker=broker,
+    cash_reserve_percentage=0.10,  # 10% cash reserve
+    max_position_percentage=0.05   # 5% max position size
+)
 ```
 
-### Account Monitoring
+### Configuration Parameters
 
-Monitor account changes and receive alerts:
-
-```python
-# Subscribe to account updates
-await portfolio.subscribe_to_account_updates(callback=handle_account_update)
-
-# Example callback
-async def handle_account_update(update):
-    if update['type'] == 'equity_change':
-        logger.info(f"Equity changed by {update['change']}")
-    elif update['type'] == 'margin_call':
-        logger.warning("Margin call received!")
-```
+- `broker`: Any broker instance from BrokerFactory
+- `cash_reserve_percentage`: Minimum cash reserve (default: 5%)
+- `max_position_percentage`: Maximum position size as % of portfolio (default: 10%)
 
 ## Position Management
 
-### Position Tracking
-
-Track positions across all asset classes:
+### Checking Investment Status
 
 ```python
-# Get all positions
-positions = await portfolio.get_positions()
+# Check if currently invested in a symbol
+is_invested = await position_manager.is_invested('AAPL')
+print(f"Invested in AAPL: {is_invested}")
 
-# Get positions by asset class
-equity_positions = await portfolio.get_positions(asset_class='equity')
-options_positions = await portfolio.get_positions(asset_class='options')
-crypto_positions = await portfolio.get_positions(asset_class='crypto')
-
-# Get positions by broker
-kraken_positions = await portfolio.get_positions(broker='kraken')
-saxo_positions = await portfolio.get_positions(broker='saxo')
+# Check if position record exists (even with 0 quantity)
+position_exists = await position_manager.position_exists('AAPL')
+print(f"Position record exists: {position_exists}")
 ```
 
-### Position Risk Analysis
-
-Analyze risk metrics for positions:
+### Getting Position Information
 
 ```python
-# Get risk metrics for all positions
-risk_metrics = await portfolio.get_position_risk()
+# Get position size (positive=long, negative=short, 0=no position)
+position_size = await position_manager.get_position_size('AAPL')
+print(f"AAPL position size: {position_size}")
 
-# Get risk metrics for specific asset class
-options_risk = await portfolio.get_position_risk(asset_class='options')
+# Get current market value of position
+position_value = await position_manager.get_position_value('AAPL', 'USD')
+print(f"AAPL position value: ${position_value}")
+```
 
-# Access risk metrics
-for position_id, metrics in risk_metrics.items():
-    position_value = metrics['position_value']
-    margin_used = metrics['margin_used']
-    leverage = metrics['leverage']
-    var_95 = metrics['var_95']  # 95% Value at Risk
+### Working with Multiple Positions
+
+```python
+# Check multiple symbols
+symbols = ['AAPL', 'MSFT', 'GOOGL', 'ETHUSDT']
+for symbol in symbols:
+    invested = await position_manager.is_invested(symbol)
+    if invested:
+        size = await position_manager.get_position_size(symbol)
+        value = await position_manager.get_position_value(symbol)
+        print(f"{symbol}: Size={size}, Value=${value:.2f}")
 ```
 
 ## Cash Management
 
-### Cash Balances
-
-Manage cash across all accounts:
+### Available Cash
 
 ```python
-# Get cash balances
-cash = await portfolio.get_cash_balances()
+# Get available cash (after reserves)
+available_cash = await position_manager.get_available_cash('USD')
+print(f"Available cash: ${available_cash}")
 
-# Get cash by currency
-usd_cash = await portfolio.get_cash_balances(currency='USD')
-eur_cash = await portfolio.get_cash_balances(currency='EUR')
+# Get total cash (before reserves)
+total_cash = await position_manager.get_total_cash('USD')
+print(f"Total cash: ${total_cash}")
 
-# Get cash by broker
-kraken_cash = await portfolio.get_cash_balances(broker='kraken')
-saxo_cash = await portfolio.get_cash_balances(broker='saxo')
+# Get buying power (includes margin)
+buying_power = await position_manager.get_buying_power('USD')
+print(f"Buying power: ${buying_power}")
 ```
 
-### Cash Utilization
-
-Monitor and control cash utilization:
+### Multi-Currency Cash
 
 ```python
-# Get cash utilization metrics
-utilization = await portfolio.get_cash_utilization()
+# Check cash in different currencies
+usd_cash = await position_manager.get_available_cash('USD')
+eur_cash = await position_manager.get_available_cash('EUR')
+btc_cash = await position_manager.get_available_cash('BTC')
 
-# Check if cash utilization is within limits
-if utilization['total_utilization'] > portfolio.risk_limits['max_cash_utilization']:
-    logger.warning("Cash utilization exceeds limit")
+print(f"USD: ${usd_cash}, EUR: €{eur_cash}, BTC: ₿{btc_cash}")
 ```
 
-## Risk Management
+## Margin Information
 
-### Portfolio Risk Metrics
-
-Calculate comprehensive risk metrics:
+### Checking Margin Status
 
 ```python
-# Get portfolio risk metrics
-risk_metrics = await portfolio.get_portfolio_risk()
+# Get detailed margin information
+margin_info = await position_manager.check_margin()
 
-# Access key metrics
-total_var = risk_metrics['total_var']
-portfolio_beta = risk_metrics['portfolio_beta']
-correlation_matrix = risk_metrics['correlation_matrix']
+print(f"Margin used: ${margin_info['margin_used']}")
+print(f"Margin available: ${margin_info['margin_available']}")
+print(f"Margin ratio: {margin_info['margin_ratio']:.2%}")
+
+# Force refresh margin data
+margin_info = await position_manager.check_margin(force_refresh=True)
 ```
 
-### Risk Limits
-
-Enforce risk limits across the portfolio:
+### Margin Monitoring
 
 ```python
-# Check position size limits
-if await portfolio.check_position_size_limit(symbol='AAPL', size=1000):
-    # Position size is within limits
-    pass
+# Monitor margin utilization
+async def monitor_margin():
+    margin_info = await position_manager.check_margin()
+    
+    if margin_info['margin_ratio'] > 0.8:  # 80% utilization
+        print("⚠️ High margin utilization detected!")
+        
+    if margin_info['margin_ratio'] > 0.9:  # 90% utilization
+        print("🚨 Critical margin utilization!")
+        # Consider reducing positions
+```
 
-# Check leverage limits
-if await portfolio.check_leverage_limit(leverage=1.5):
-    # Leverage is within limits
-    pass
+## Portfolio Summary
+
+### Getting Complete Portfolio State
+
+```python
+# Get comprehensive portfolio summary
+summary = await position_manager.get_portfolio_summary()
+
+# Access key information
+print(f"Broker: {summary['broker_name']}")
+print(f"Account ID: {summary['account_id']}")
+print(f"Total Portfolio Value: ${summary['total_portfolio_value']}")
+print(f"Total Cash: ${summary['total_cash']}")
+print(f"Positions Value: ${summary['positions_value']}")
+print(f"Total Positions: {summary['total_positions']}")
+print(f"Long Positions: {summary['long_positions']}")
+print(f"Short Positions: {summary['short_positions']}")
+print(f"Margin Used: ${summary['margin_used']}")
+print(f"Margin Available: ${summary['margin_available']}")
+```
+
+### Portfolio Health Check
+
+```python
+async def portfolio_health_check():
+    summary = await position_manager.get_portfolio_summary()
+    
+    # Check margin utilization
+    if summary['margin_ratio'] > 0.7:
+        print(f"⚠️ High margin utilization: {summary['margin_ratio']:.1%}")
+    
+    # Check cash levels
+    cash_ratio = summary['total_cash'] / summary['total_portfolio_value']
+    if cash_ratio < 0.05:
+        print(f"⚠️ Low cash reserves: {cash_ratio:.1%}")
+    
+    # Check position count
+    if summary['total_positions'] > 50:
+        print(f"⚠️ High position count: {summary['total_positions']}")
+    
+    print("✅ Portfolio health check completed")
 ```
 
 ## Multi-Currency Support
 
-### Currency Conversion
-
-Handle multiple currencies:
+### Working with Multiple Currencies
 
 ```python
-# Get exchange rates
-rates = await portfolio.get_exchange_rates()
+# Get list of currencies with balances
+currencies = await position_manager.get_currencies()
+print(f"Available currencies: {currencies}")
 
-# Convert amount between currencies
-usd_amount = await portfolio.convert_currency(100, 'EUR', 'USD')
-
-# Get portfolio value in specific currency
-portfolio_value = await portfolio.get_portfolio_value(currency='USD')
+# Get cash balances for each currency
+for currency in currencies:
+    balance = await position_manager.get_total_cash(currency)
+    print(f"{currency}: {balance}")
 ```
 
-### Currency Risk
-
-Manage currency exposure:
+### Currency Enumeration
 
 ```python
-# Get currency exposure
-exposure = await portfolio.get_currency_exposure()
+from src.portfolio.position_manager import Currency
 
-# Hedge currency risk
-if exposure['EUR'] > 0.3:  # More than 30% EUR exposure
-    await portfolio.hedge_currency('EUR')
+# Use predefined currency constants
+usd_cash = await position_manager.get_available_cash(Currency.USD.value)
+btc_cash = await position_manager.get_available_cash(Currency.BTC.value)
+eth_cash = await position_manager.get_available_cash(Currency.ETH.value)
 ```
 
-## Portfolio Monitoring
+## Options Support
 
-### Real-time Monitoring
-
-Monitor portfolio changes in real-time:
+### Options Expiration Dates
 
 ```python
-# Subscribe to portfolio updates
-await portfolio.subscribe_to_portfolio_updates(callback=handle_portfolio_update)
+# Get expiration dates for options on a symbol
+expiration_dates = await position_manager.get_options_expiration_dates('AAPL')
 
-# Example callback
-async def handle_portfolio_update(update):
-    if update['type'] == 'position_change':
-        logger.info(f"Position changed: {update['symbol']}")
-    elif update['type'] == 'risk_alert':
-        logger.warning(f"Risk alert: {update['message']}")
+print("AAPL Options Expiration Dates:")
+for date in expiration_dates:
+    print(f"  {date.strftime('%Y-%m-%d')}")
 ```
 
-### Performance Tracking
+## Portfolio Liquidation
 
-Track portfolio performance:
+### Emergency Liquidation
 
 ```python
-# Get performance metrics
-performance = await portfolio.get_performance_metrics()
+# Emergency liquidation with market orders
+results = await position_manager.liquidate_portfolio(emergency=True)
 
-# Access key metrics
-total_return = performance['total_return']
-sharpe_ratio = performance['sharpe_ratio']
-max_drawdown = performance['max_drawdown']
+print(f"Total positions: {results['total_positions']}")
+print(f"Successful orders: {results['successful_orders']}")
+print(f"Failed orders: {results['failed_orders']}")
+print(f"Order IDs: {results['order_ids']}")
+
+if results['errors']:
+    print("Errors encountered:")
+    for error in results['errors']:
+        print(f"  - {error}")
 ```
+
+### Controlled Liquidation
+
+```python
+# Controlled liquidation with limit orders
+results = await position_manager.liquidate_portfolio(emergency=False)
+
+# Monitor liquidation progress
+for order_id in results['order_ids']:
+    # Check order status through broker
+    order_status = await broker.get_order_status(order_id)
+    print(f"Order {order_id}: {order_status}")
+```
+
+## Caching and Performance
+
+### Cache Management
+
+```python
+# Force refresh cache when needed
+await position_manager.force_refresh_cache()
+
+# Cache is automatically managed with 2-minute TTL
+# No manual intervention usually needed
+```
+
+### Performance Optimization
+
+The PositionManager uses intelligent caching:
+
+- **Cache TTL**: 2 minutes (configurable)
+- **Automatic Refresh**: Cache refreshes when expired
+- **Graceful Degradation**: Uses stale cache if refresh fails
+- **Minimal API Calls**: Batches broker requests
 
 ## Best Practices
 
-1. **Risk Management**
-   - Set appropriate risk limits for your strategy
-   - Monitor risk metrics regularly
-   - Implement automated risk controls
-   - Diversify across asset classes and currencies
+### 1. Regular Monitoring
 
-2. **Cash Management**
-   - Maintain adequate cash reserves
-   - Monitor cash utilization
-   - Implement cash sweep strategies
-   - Consider currency exposure
+```python
+async def portfolio_monitor():
+    """Regular portfolio monitoring routine."""
+    
+    # Get current state
+    summary = await position_manager.get_portfolio_summary()
+    
+    # Log key metrics
+    logger.info(f"Portfolio Value: ${summary['total_portfolio_value']}")
+    logger.info(f"Margin Ratio: {summary['margin_ratio']:.1%}")
+    logger.info(f"Position Count: {summary['total_positions']}")
+    
+    # Check for alerts
+    if summary['margin_ratio'] > 0.8:
+        logger.warning("High margin utilization")
+    
+    if summary['total_positions'] > 100:
+        logger.warning("High position count")
+```
 
-3. **Position Management**
-   - Size positions according to risk limits
-   - Monitor position concentration
-   - Implement position limits
-   - Regular position review
+### 2. Error Handling
 
-4. **Portfolio Monitoring**
-   - Set up real-time monitoring
-   - Implement automated alerts
-   - Regular performance review
-   - Document all changes
+```python
+async def safe_position_check(symbol: str):
+    """Safely check position with error handling."""
+    try:
+        is_invested = await position_manager.is_invested(symbol)
+        if is_invested:
+            size = await position_manager.get_position_size(symbol)
+            value = await position_manager.get_position_value(symbol)
+            return {'invested': True, 'size': size, 'value': value}
+        return {'invested': False}
+        
+    except Exception as e:
+        logger.error(f"Error checking position for {symbol}: {e}")
+        return {'error': str(e)}
+```
+
+### 3. Cash Reserve Management
+
+```python
+async def check_available_funds(required_amount: float):
+    """Check if sufficient funds available for trade."""
+    
+    available_cash = await position_manager.get_available_cash()
+    
+    if available_cash >= required_amount:
+        return True
+    
+    # Check if we can use margin
+    buying_power = await position_manager.get_buying_power()
+    if buying_power >= required_amount:
+        # Check margin safety
+        margin_info = await position_manager.check_margin()
+        if margin_info['margin_ratio'] < 0.7:  # Keep under 70%
+            return True
+    
+    return False
+```
 
 ## Examples
 
-### Complete Portfolio Management Workflow
+### Complete Trading Strategy Integration
 
 ```python
-async def manage_portfolio(portfolio):
-    # Get portfolio summary
-    summary = await portfolio.get_account_summary()
+class ExampleStrategy:
+    def __init__(self, broker):
+        self.position_manager = PositionManager(
+            broker=broker,
+            cash_reserve_percentage=0.05,
+            max_position_percentage=0.10
+        )
     
-    # Check margin utilization
-    if summary['margin_utilization'] > 0.7:
-        logger.warning("High margin utilization detected")
-        # Implement risk reduction measures
-    
-    # Analyze position risks
-    risk_metrics = await portfolio.get_position_risk()
-    for position_id, metrics in risk_metrics.items():
-        # Check leverage
-        if metrics['leverage'] > portfolio.risk_limits['max_leverage']:
-            logger.warning(f"High leverage detected for position {position_id}")
-            # Consider reducing position size
+    async def analyze_and_trade(self, symbol: str):
+        """Example trading logic with position management."""
         
-        # Check VaR
-        if metrics['var_95'] > summary['total_equity'] * 0.1:
-            logger.warning(f"High VaR detected for position {position_id}")
-            # Consider hedging or reducing position
-    
-    # Monitor cash utilization
-    utilization = await portfolio.get_cash_utilization()
-    if utilization['total_utilization'] > portfolio.risk_limits['max_cash_utilization']:
-        logger.warning("High cash utilization")
-        # Consider reducing positions or adding funds
-    
-    # Check currency exposure
-    exposure = await portfolio.get_currency_exposure()
-    for currency, amount in exposure.items():
-        if amount > 0.3:  # More than 30% exposure
-            logger.warning(f"High {currency} exposure")
-            # Consider hedging
-    
-    # Get performance metrics
-    performance = await portfolio.get_performance_metrics()
-    if performance['max_drawdown'] > portfolio.risk_limits['max_drawdown']:
-        logger.warning("Maximum drawdown exceeded")
-        # Implement risk reduction measures
-```
-
-### Automated Portfolio Rebalancing
-
-```python
-async def rebalance_portfolio(portfolio, target_weights):
-    # Get current positions
-    positions = await portfolio.get_positions()
-    
-    # Calculate required changes
-    for symbol, target_weight in target_weights.items():
-        current_value = positions.get(symbol, {}).get('market_value', 0)
-        target_value = portfolio.get_portfolio_value() * target_weight
+        # Check current position
+        is_invested = await self.position_manager.is_invested(symbol)
+        current_size = await self.position_manager.get_position_size(symbol)
         
-        if abs(current_value - target_value) > portfolio.get_portfolio_value() * 0.01:  # 1% threshold
-            # Calculate required position change
-            change = target_value - current_value
+        # Get portfolio state
+        summary = await self.position_manager.get_portfolio_summary()
+        
+        # Check if we can trade
+        available_cash = await self.position_manager.get_available_cash()
+        margin_ratio = summary['margin_ratio']
+        
+        if margin_ratio > 0.7:
+            print("Margin too high, skipping trade")
+            return
+        
+        # Calculate position size based on available cash
+        max_trade_amount = available_cash * 0.1  # 10% of available cash
+        
+        # Your trading logic here
+        if not is_invested and should_buy_signal():
+            # Calculate shares to buy
+            current_price = await get_current_price(symbol)
+            shares = int(max_trade_amount / current_price)
             
-            # Execute rebalancing trade
-            if change > 0:
-                await portfolio.enter_position(symbol, change)
-            else:
-                await portfolio.exit_position(symbol, abs(change))
+            # Place order through broker
+            order_result = await self.broker.place_order(
+                symbol=symbol,
+                side='buy',
+                quantity=shares,
+                order_type='market'
+            )
+            
+            print(f"Bought {shares} shares of {symbol}")
+        
+        elif is_invested and should_sell_signal():
+            # Close position
+            await self.broker.place_order(
+                symbol=symbol,
+                side='sell',
+                quantity=abs(current_size),
+                order_type='market'
+            )
+            
+            print(f"Sold {symbol} position")
+
+### Portfolio Rebalancing
+
+```python
+async def rebalance_portfolio():
+    """Example portfolio rebalancing logic."""
+    
+    # Get current state
+    summary = await position_manager.get_portfolio_summary()
+    total_value = summary['total_portfolio_value']
+    
+    # Define target allocations
+    target_allocations = {
+        'AAPL': 0.20,  # 20%
+        'MSFT': 0.20,  # 20%
+        'GOOGL': 0.15, # 15%
+        'ETHUSDT': 0.10, # 10%
+        # Cash: 35%
+    }
+    
+    for symbol, target_weight in target_allocations.items():
+        current_value = await position_manager.get_position_value(symbol)
+        current_weight = current_value / total_value
+        
+        target_value = total_value * target_weight
+        difference = target_value - current_value
+        
+        if abs(difference) > total_value * 0.02:  # 2% threshold
+            print(f"{symbol}: Current {current_weight:.1%}, "
+                  f"Target {target_weight:.1%}, "
+                  f"Difference: ${difference:.2f}")
+            
+            # Rebalancing logic here
+            # ...
 ```
 
----
-
-This manual provides a comprehensive guide to portfolio management across all asset classes. For specific asset class details, refer to the respective manuals (e.g., options_manual.md for options-specific features). 
+This manual focuses exclusively on the PositionManager functionality. Risk management features will be documented separately once the risk management refactoring is complete. 
