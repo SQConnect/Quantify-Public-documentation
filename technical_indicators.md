@@ -10,11 +10,13 @@ This document provides an overview of the technical indicators available in the 
    - Simple Moving Average (SMA)
    - Exponential Moving Average (EMA)
    - Projected Moving Average (PMA)
+   - Projected Moving Average (ProjectedMovingAverage)
 
 2. **Directional Indicators**
    - Average Directional Index (ADX)
    - Aroon Indicator
    - True Strength Index (TSI)
+   - Parabolic SAR (PSAR)
 
 3. **Channel Indicators**
    - Bollinger Bands
@@ -32,6 +34,7 @@ This document provides an overview of the technical indicators available in the 
 2. **Rate of Change**
    - Momentum
    - Rate of Change (ROC)
+   - Williams %R
 
 ### Volume Indicators
 
@@ -55,21 +58,19 @@ This document provides an overview of the technical indicators available in the 
 
 ## Usage in Strategies
 
-All indicators are available in two forms:
-1. Base indicators that work with raw price data
-2. Candle indicators that work with candle data structures
+All indicators work with candle data structures and are designed to be used in trading strategies.
 
 ### Example Usage
 
 ```python
 from src.indicators.candle_indicators import (
-    CandleRSI, CandleMACD, CandleBollingerBands,
-    CandleStochasticOscillator, CandleATR, CandleIchimokuCloud,
-    CandleEMA, CandleWilliamsR, CandleMomentum,
-    CandleROC, CandleTSI, CandleADX, CandleAroon,
-    CandleKeltnerChannels, CandleDonchianChannels,
-    CandleVWAP, CandleOBV, CandleMFI, CandleVolatility,
-    CandleVolumeIndicators, CandlePMA
+    RSI, MACD, BollingerBands,
+    StochasticOscillator, ATR, IchimokuCloud,
+    EMA, SMA, WilliamsR, Momentum,
+    ROC, TSI, ADX, Aroon,
+    KeltnerChannels, DonchianChannels,
+    VWAP, OBV, MFI, Volatility,
+    VolumeIndicators, PMA, ProjectedMovingAverage
 )
 
 class YourStrategy(BaseStrategy):
@@ -77,27 +78,29 @@ class YourStrategy(BaseStrategy):
         super().__init__(config_path)
         
         # Initialize indicators
-        self.rsi = CandleRSI(period=14)
-        self.macd = CandleMACD(fast_period=12, slow_period=26, signal_period=9)
-        self.bb = CandleBollingerBands(period=20, num_std=2.0)
-        self.stoch = CandleStochasticOscillator(k_period=14, d_period=3, slowing=3)
-        self.atr = CandleATR(period=14)
-        self.ichimoku = CandleIchimokuCloud()
-        self.ema = CandleEMA(period=20)
-        self.williams_r = CandleWilliamsR(period=14)
-        self.momentum = CandleMomentum(period=14)
-        self.roc = CandleROC(period=14)
-        self.tsi = CandleTSI(first_period=25, second_period=13, signal_period=13)
-        self.adx = CandleADX(period=14)
-        self.aroon = CandleAroon(period=25)
-        self.keltner = CandleKeltnerChannels(ema_period=20, atr_period=10, atr_multiplier=2.0)
-        self.donchian = CandleDonchianChannels(period=20)
-        self.vwap = CandleVWAP()
-        self.obv = CandleOBV()
-        self.mfi = CandleMFI(period=14)
-        self.volatility = CandleVolatility(period=14)
-        self.volume = CandleVolumeIndicators(period=20)
-        self.pma = CandlePMA(period=20)
+        self.rsi = RSI(period=14)
+        self.macd = MACD(fast_period=12, slow_period=26, signal_period=9)
+        self.bb = BollingerBands(period=20, num_std=2.0)
+        self.stoch = StochasticOscillator(k_period=14, d_period=3, slowing=3)
+        self.atr = ATR(period=14)
+        self.ichimoku = IchimokuCloud()
+        self.ema = EMA(period=20)
+        self.sma = SMA(period=20)
+        self.williams_r = WilliamsR(period=14)
+        self.momentum = Momentum(period=14)
+        self.roc = ROC(period=14)
+        self.tsi = TSI(first_period=25, second_period=13, signal_period=13)
+        self.adx = ADX(period=14)
+        self.aroon = Aroon(period=25)
+        self.keltner = KeltnerChannels(ema_period=20, atr_period=10, atr_multiplier=2.0)
+        self.donchian = DonchianChannels(period=20)
+        self.vwap = VWAP()
+        self.obv = OBV()
+        self.mfi = MFI(period=14)
+        self.volatility = Volatility(period=14)
+        self.volume = VolumeIndicators(period=20)
+        self.pma = PMA(period=20)
+        self.projected_ma = ProjectedMovingAverage(period=20)
 ```
 
 ## Indicator Parameters

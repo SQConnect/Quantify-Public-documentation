@@ -2,7 +2,16 @@
 
 ## Overview
 
-This manual documents the comprehensive options Greeks support implemented in the Saxo broker integration. The system provides real-time Greeks data, theoretical calculations, data validation, and advanced analytics for options trading.
+This manual documents the comprehensive options Greeks support in the Quantify Options Framework. The system provides real-time Greeks data, theoretical calculations, data validation, and advanced analytics for options trading through a unified broker interface.
+
+### Broker Support
+
+All Greeks functionality is accessed through the abstract `BaseBroker` interface:
+
+- **✅ Saxo Bank**: Full Greeks support with real-time data
+- **⚠️ Other Brokers**: May have limited or no options support
+
+All examples use the standard broker interface (`broker.method_name()`) for maximum compatibility.
 
 ## Table of Contents
 
@@ -144,9 +153,9 @@ Calculates real-time strategy metrics using actual Greeks data.
 ### Basic Greeks Retrieval
 
 ```python
-# Get Greeks for a single option
-saxo_broker = SaxoBroker(config)
-greeks_data = await saxo_broker.get_option_greeks("12345")
+# Get Greeks for a single option (works with any broker that supports options)
+broker = await setup_broker()  # SaxoBroker, etc.
+greeks_data = await broker.get_option_greeks("12345")
 
 print(f"Delta: {greeks_data['delta']:.4f}")
 print(f"Gamma: {greeks_data['gamma']:.4f}")
@@ -162,7 +171,7 @@ from datetime import datetime, timedelta
 
 # Analyze entire options chain
 expiry = datetime.now() + timedelta(days=30)
-analysis = await saxo_broker.get_option_chain_analysis("AAPL", expiry)
+analysis = await broker.get_option_chain_analysis("AAPL", expiry)
 
 print(f"Put/Call Volume Ratio: {analysis['put_call_ratio_volume']:.2f}")
 print(f"ATM Implied Volatility: {analysis['volatility_analysis']['atm_iv']:.2%}")
@@ -173,8 +182,7 @@ print(f"IV Skew: {analysis['volatility_analysis']['iv_skew']:.2%}")
 
 ```python
 # Get options chain with live Greeks
-saxo_options = SaxoOptions(saxo_broker)
-enriched_chain = await saxo_options.get_enriched_options_chain("AAPL", expiry)
+enriched_chain = await broker.get_enriched_options_chain("AAPL", expiry)
 
 for call in enriched_chain.calls:
     greeks = call.greeks
@@ -186,7 +194,7 @@ for call in enriched_chain.calls:
 
 ```python
 # Create and analyze a strategy
-strategy = await saxo_options.create_option_strategy(
+strategy = await broker.create_option_strategy(
     "IRON_CONDOR", 
     "AAPL", 
     expiry,
@@ -198,16 +206,13 @@ strategy = await saxo_options.create_option_strategy(
 )
 
 # Calculate real-time metrics
-spot_price = 150.25
-metrics = await saxo_options.calculate_strategy_metrics(strategy, spot_price)
+spot_price = await broker.get_current_price("AAPL")
+metrics = await broker.calculate_strategy_metrics(strategy, spot_price)
 
-print(f"Strategy Cost: ${metrics['estimated_cost']:.2f}")
-print(f"Total Delta: {metrics['total_delta']:.4f}")
-print(f"Total Gamma: {metrics['total_gamma']:.4f}")
-print(f"Total Theta: {metrics['total_theta']:.4f}")
-print(f"Total Vega: {metrics['total_vega']:.4f}")
-print(f"Delta Neutral: {metrics['delta_neutral']}")
-print(f"Gamma Risk: {metrics['gamma_risk']}")
+print(f"Strategy Delta: {metrics['total_delta']:.4f}")
+print(f"Strategy Gamma: {metrics['total_gamma']:.4f}")
+print(f"Strategy Theta: {metrics['total_theta']:.4f}")
+print(f"Strategy Vega: {metrics['total_vega']:.4f}")
 ```
 
 ### Bulk Greeks Fetching
@@ -215,7 +220,7 @@ print(f"Gamma Risk: {metrics['gamma_risk']}")
 ```python
 # Get Greeks for multiple options efficiently
 option_symbols = ["12345", "12346", "12347", "12348"]
-bulk_greeks = await saxo_options.get_option_greeks_bulk(option_symbols)
+bulk_greeks = await broker.get_option_greeks_bulk(option_symbols)
 
 for symbol, greeks_data in bulk_greeks.items():
     if greeks_data:
@@ -306,11 +311,11 @@ greeks_results = await asyncio.gather(*tasks, return_exceptions=True)
 
 ```python
 try:
-    greeks_data = await saxo_broker.get_option_greeks(option_symbol)
+    greeks_data = await broker.get_option_greeks(option_symbol)
 except Exception as e:
     logger.error(f"Failed to get Greeks for {option_symbol}: {e}")
     # Fallback to theoretical calculation
-    greeks_data = await self._calculate_theoretical_greeks(option_symbol)
+    greeks_data = await broker._calculate_theoretical_greeks(option_symbol)
 ```
 
 ### Logging

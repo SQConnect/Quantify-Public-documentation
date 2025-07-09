@@ -15,14 +15,7 @@ The options framework provides a robust, production-ready system for defining, e
 - ✅ **Strategy Builder**: Flexible API for custom strategy creation
 - ✅ **Greeks Analysis**: Comprehensive Greeks data with quality scoring and risk assessment
 
-### 🔄 **Upcoming Enhancements**
-- 🚧 **Enhanced Authentication**: Certificate-based auth and PKCE flow
-- 🚧 **Advanced Position Netting**: FIFO End-of-day and Real-time netting
-- 🚧 **Order Management**: Extended order conditions and algo orders
-- 🚧 **Market Data**: Delayed data and order book depth support
-- 🚧 **Risk Management**: Pre-trade margin checks and risk limits
-- 🚧 **Corporate Actions**: Proper handling of splits, mergers, etc.
-- 🚧 **Streaming Data**: Enhanced market state and trade handling
+
 
 ### **Framework Usage Patterns**
 
@@ -209,11 +202,8 @@ saxo_config = config_manager.get_broker_config('saxo')
 broker = BrokerFactory.create_broker('saxo', saxo_config)
 await broker.connect()
 
-# Access strategy factory
-strategy_factory = broker.saxo_options
-
-# Create Bull Call Spread
-strategy = await strategy_factory.create_option_strategy(
+# Create Bull Call Spread using broker's options functionality
+strategy = await broker.create_option_strategy(
     strategy_type="BullCallSpread",
     underlying="NVDA:xnas",
     expiry=datetime(2024, 12, 20),
@@ -230,7 +220,7 @@ print(f"Break-even: {strategy.break_even_points}")
 
 # Execute the strategy
 if hasattr(strategy, 'legs') and strategy.legs:
-    order_results = await strategy_factory.place_strategy_orders(strategy)
+    order_results = await broker.place_strategy_orders(strategy)
     print(f"Orders placed: {order_results}")
 ```
 
@@ -238,7 +228,7 @@ if hasattr(strategy, 'legs') and strategy.legs:
 
 ```python
 # Iron Condor with specific parameters
-iron_condor = await strategy_factory.create_option_strategy(
+iron_condor = await broker.create_option_strategy(
     strategy_type="IronCondor",
     underlying="SPY:arcx",
     expiry=datetime(2024, 12, 20),
@@ -251,7 +241,7 @@ iron_condor = await strategy_factory.create_option_strategy(
 )
 
 # Calendar Spread
-calendar = await strategy_factory.create_option_strategy(
+calendar = await broker.create_option_strategy(
     strategy_type="CalendarSpread",
     underlying="AAPL:xnas",
     short_expiry=datetime(2024, 11, 15),
@@ -268,7 +258,7 @@ The framework supports multiple types of options:
 ### Stock Options
 ```python
 # Regular equity options
-stock_chain = await broker.saxo_options.get_options_chain(
+stock_chain = await broker.get_options_chain(
     underlying="AAPL:xnas",
     expiry=datetime(2024, 12, 20)
 )
@@ -277,7 +267,7 @@ stock_chain = await broker.saxo_options.get_options_chain(
 ### Index Options
 ```python
 # Index options (e.g., SPX)
-index_chain = await broker.saxo_options.get_options_chain(
+index_chain = await broker.get_options_chain(
     underlying="SPX:indexs",
     expiry=datetime(2024, 12, 20)
 )
@@ -286,7 +276,7 @@ index_chain = await broker.saxo_options.get_options_chain(
 ### Futures Options
 ```python
 # Options on futures
-futures_chain = await broker.saxo_options.get_options_chain(
+futures_chain = await broker.get_options_chain(
     underlying="ESZ4:cme",  # December 2024 E-mini S&P 500
     expiry=datetime(2024, 12, 20)
 )
@@ -344,12 +334,12 @@ The framework includes comprehensive error handling and validation:
 try:
     result = await broker.place_order(
         symbol="12345",
-        order_type="Limit",
+    order_type="Limit",
         side="Buy",
         quantity=1,
         price=2.50,
         validation_type="Full"  # Performs full validation
-    )
+)
 except OrderError as e:
     print(f"Order validation failed: {e}")
 ```
@@ -360,7 +350,7 @@ except OrderError as e:
 try:
     strategy = await strategy_factory.create_option_strategy(
         strategy_type="IronCondor",
-        underlying="SPY:arcx",
+    underlying="SPY:arcx",
         expiry=datetime(2024, 12, 20),
         put_wing_width=10.0,
         call_wing_width=10.0,
@@ -373,6 +363,8 @@ except ValueError as e:
 ## 8. Greeks Analysis and Risk Management
 
 The framework provides comprehensive Greeks analysis with real-time monitoring and data validation.
+
+**📋 Broker Support Note**: Greeks functionality is fully supported by Saxo Bank broker. Other brokers may have limited or no options support. All examples below use the abstract broker interface and will work with any broker that supports options.
 
 ### Getting Greeks Data
 
@@ -407,7 +399,7 @@ print(f"Open Interest Ratio: {ratios['open_interest_ratio']:.2f}")
 
 ```python
 # Calculate real-time strategy Greeks
-metrics = await broker.saxo_options.calculate_strategy_metrics(strategy, spot_price)
+metrics = await broker.calculate_strategy_metrics(strategy, spot_price)
 
 print(f"Portfolio Delta: {metrics['total_delta']:.4f}")
 print(f"Portfolio Gamma: {metrics['total_gamma']:.4f}")
@@ -477,10 +469,9 @@ async def complete_options_workflow():
     
     # 1. Setup
     broker = await setup_broker()
-    strategy_factory = broker.saxo_options
     
-    # 2. Create strategy using factory
-    strategy = await strategy_factory.create_option_strategy(
+    # 2. Create strategy using broker
+    strategy = await broker.create_option_strategy(
         strategy_type="IronCondor",
         underlying="SPY:arcx",
         expiry=datetime(2024, 12, 20),
@@ -489,14 +480,14 @@ async def complete_options_workflow():
     
     # 3. Analyze Greeks before execution
     spot_price = await broker.get_current_price("SPY:arcx")
-    metrics = await strategy_factory.calculate_strategy_metrics(strategy, spot_price)
+    metrics = await broker.calculate_strategy_metrics(strategy, spot_price)
     
     print(f"Strategy Greeks - Delta: {metrics['total_delta']:.4f}, "
           f"Gamma: {metrics['total_gamma']:.4f}, "
           f"Theta: {metrics['total_theta']:.4f}")
     
     # 4. Execute strategy
-    orders = await strategy_factory.place_strategy_orders(strategy)
+    orders = await broker.place_strategy_orders(strategy)
     
     # 5. Monitor and manage with Greeks
     tracker = StrategyPerformanceTracker()
@@ -508,7 +499,7 @@ async def complete_options_workflow():
         
         # Update Greeks and risk metrics
         current_spot = await broker.get_current_price("SPY:arcx")
-        current_metrics = await strategy_factory.calculate_strategy_metrics(strategy, current_spot)
+        current_metrics = await broker.calculate_strategy_metrics(strategy, current_spot)
         
         # Greeks-based risk management
         if abs(current_metrics['total_delta']) > 0.5:  # Delta risk
@@ -536,7 +527,7 @@ async def advanced_greeks_analysis():
     """Advanced Greeks analysis and option chain evaluation"""
     
     # 1. Get enriched options chain with live Greeks
-    enriched_chain = await broker.saxo_options.get_enriched_options_chain(
+    enriched_chain = await broker.get_enriched_options_chain(
         underlying="AAPL:xnas",
         expiry=datetime(2024, 12, 20),
         include_live_greeks=True
