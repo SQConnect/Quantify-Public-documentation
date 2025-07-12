@@ -11,8 +11,9 @@ This document provides comprehensive documentation for all brokers available in 
 6. [Binance Broker](#binance-broker)
 7. [Backtest Broker](#backtest-broker)
 8. [Mock Broker](#mock-broker)
-9. [Common Operations](#common-operations)
-10. [Best Practices](#best-practices)
+9. [Unified Market Data Interface](#unified-market-data-interface)
+10. [Common Operations](#common-operations)
+11. [Best Practices](#best-practices)
 
 ## Overview
 
@@ -415,6 +416,177 @@ mock_config = {
 }
 ```
 
+## Unified Market Data Interface
+
+The framework provides a unified market data interface that standardizes how brokers handle real-time market data subscriptions. This interface supports multiple data channels and integrates seamlessly with the strategy framework.
+
+### Market Data Channels
+
+The framework supports four types of market data channels:
+
+```python
+from src.broker_interface.market_data_interface import MarketDataChannel
+
+# Available channels
+MarketDataChannel.TICK    # Individual trades/ticks
+MarketDataChannel.QUOTE   # Best bid/ask quotes  
+MarketDataChannel.DEPTH   # Order book depth
+MarketDataChannel.OHLC    # Candlestick/OHLC data
+```
+
+### Market Data Subscription
+
+Create market data subscriptions using the unified interface:
+
+```python
+from src.broker_interface.market_data_interface import MarketDataSubscription, MarketDataChannel
+
+# Subscribe to multiple channels for a symbol
+subscription = MarketDataSubscription(
+    symbol="ETHUSDT",
+    channels=[
+        MarketDataChannel.OHLC,
+        MarketDataChannel.TICK,
+        MarketDataChannel.QUOTE,
+        MarketDataChannel.DEPTH
+    ],
+    timeframe="1m",        # Required for OHLC channel
+    depth_levels=10,       # Number of order book levels
+    callback=my_callback   # Optional callback function
+)
+
+# Subscribe via broker
+success = await broker.subscribe_market_data(subscription)
+```
+
+### Broker Capabilities
+
+Each broker reports its market data capabilities:
+
+```python
+# Get broker capabilities
+capabilities = await broker.get_market_data_capabilities()
+
+print(f"Tick support: {capabilities.tick_support}")
+print(f"Quote support: {capabilities.quote_support}")
+print(f"Depth support: {capabilities.depth_support}")
+print(f"OHLC support: {capabilities.ohlc_support}")
+print(f"Max depth levels: {capabilities.max_depth_levels}")
+print(f"Base timeframe: {capabilities.base_timeframe}")
+```
+
+### Broker Support Matrix
+
+| Broker | TICK | QUOTE | DEPTH | OHLC | Base Timeframe |
+|--------|------|-------|-------|------|----------------|
+| Saxo | ✅ | ✅ | ❌ | ✅ | 1m |
+| Kraken | ✅ | ✅ | ✅ | ✅ | 1m |
+| IB | ✅ | ✅ | ✅ | ✅ | 1m |
+| Binance | ✅ | ✅ | ✅ | ✅ | 1m |
+| Mock | ✅ | ✅ | ✅ | ✅ | 1m |
+
+### Event Integration
+
+The unified interface automatically publishes events to the framework's event system:
+
+```python
+from src.core.events import event_manager, OHLCEvent, TickEvent, QuoteEvent, DepthEvent
+
+# Subscribe to market data events
+async def on_ohlc_data(event: OHLCEvent):
+    print(f"OHLC: {event.symbol} - O:{event.open} H:{event.high} L:{event.low} C:{event.close}")
+
+async def on_tick_data(event: TickEvent):
+    print(f"Tick: {event.symbol} - Price:{event.price} Volume:{event.volume}")
+
+async def on_quote_data(event: QuoteEvent):
+    print(f"Quote: {event.symbol} - Bid:{event.bid} Ask:{event.ask}")
+
+async def on_depth_data(event: DepthEvent):
+    print(f"Depth: {event.symbol} - Levels:{len(event.bids)}")
+
+# Register event handlers
+await event_manager.subscribe("OHLC_DATA", on_ohlc_data)
+await event_manager.subscribe("tick", on_tick_data)
+await event_manager.subscribe("quote", on_quote_data)
+await event_manager.subscribe("depth", on_depth_data)
+```
+
+### Strategy Integration
+
+Strategies automatically use the unified interface through the base strategy class:
+
+```python
+class MyStrategy(BaseStrategy):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Strategy automatically subscribes to OHLC data
+        # based on configured symbols and timeframes
+    
+    async def on_live_candle(self, event: CandleEvent):
+        # Handle OHLC data
+        pass
+    
+    async def on_tick(self, event: TickEvent):
+        # Handle tick data (if subscribed)
+        pass
+    
+    async def on_quote(self, event: QuoteEvent):
+        # Handle quote data (if subscribed)
+        pass
+    
+    async def on_depth(self, event: DepthEvent):
+        # Handle depth data (if subscribed)
+        pass
+```
+
+### Advanced Usage
+
+#### Custom Market Data Subscriptions
+
+```python
+# Subscribe to specific channels only
+tick_subscription = MarketDataSubscription(
+    symbol="BTCUSD",
+    channels=[MarketDataChannel.TICK],
+    callback=my_tick_handler
+)
+
+# Subscribe to order book with custom depth
+depth_subscription = MarketDataSubscription(
+    symbol="ETHUSD",
+    channels=[MarketDataChannel.DEPTH],
+    depth_levels=20  # 20 levels instead of default 10
+)
+```
+
+#### Multiple Symbol Subscriptions
+
+```python
+symbols = ["BTCUSD", "ETHUSD", "ADAUSD"]
+subscriptions = []
+
+for symbol in symbols:
+    subscription = MarketDataSubscription(
+        symbol=symbol,
+        channels=[MarketDataChannel.OHLC, MarketDataChannel.TICK],
+        timeframe="1m"
+    )
+    subscriptions.append(subscription)
+    await broker.subscribe_market_data(subscription)
+```
+
+#### Subscription Management
+
+```python
+# Get active subscriptions
+active_subs = await broker.get_active_subscriptions()
+print(f"Active subscriptions: {list(active_subs.keys())}")
+
+# Unsubscribe from specific symbol
+await broker.unsubscribe_market_data("BTCUSD")
+```
+
 ## Common Operations
 
 ### Universal Broker Interface
@@ -430,9 +602,13 @@ await broker.disconnect()
 order = await broker.place_order(symbol, order_type, side, quantity, price, time_in_force)
 success = await broker.cancel_order(order_id)
 
-# Market Data  
+# Market Data (Legacy Interface)
 data = await broker.get_market_data(symbol)
 await broker.subscribe_to_market_data(symbol, callback)
+
+# Market Data (Unified Interface) - Recommended
+subscription = MarketDataSubscription(symbol, channels, timeframe)
+await broker.subscribe_market_data(subscription)
 
 # Portfolio
 positions = await broker.get_positions()
@@ -485,31 +661,45 @@ except BrokerError as e:
 - Use try/finally blocks to ensure proper disconnection
 - Let automatic reconnection handle temporary disconnects
 
-### 3. Order Management
+### 3. Market Data Subscriptions
+- Use the unified `MarketDataInterface` for new implementations
+- Check broker capabilities before subscribing to channels
+- Subscribe only to channels you actually need to reduce bandwidth
+- Use the base timeframe (usually 1m) and let the candle manager create other timeframes
+- Handle subscription failures gracefully with retry logic
+
+### 4. Order Management
 - Use `Decimal` for all price and quantity values
 - Validate orders before submission
 - Monitor order events for execution updates
 - Implement proper position sizing
 
-### 4. Error Handling
+### 5. Error Handling
 - Catch specific exceptions (OrderError, ConnectionError)
 - Implement retry logic for transient errors  
 - Log all errors with context for debugging
 
-### 5. Performance
+### 6. Performance
 - Cache market data when possible
 - Use async/await properly for concurrent operations
 - Batch operations when supported by the broker
+- Limit the number of simultaneous market data subscriptions
 
-### 6. Testing
+### 7. Testing
 - Use Mock broker for unit tests
 - Use Backtest broker for strategy validation
 - Test with paper trading before live deployment
 
-### 7. Options Trading
+### 8. Options Trading
 - Always validate option chains before trading
 - Monitor Greeks for risk management
 - Use multi-leg orders for complex strategies
 - Implement assignment checking for short options
+
+### 9. Event-Driven Architecture
+- Use event handlers for real-time data processing
+- Avoid blocking operations in event handlers
+- Implement proper error handling in event callbacks
+- Use the framework's event system for loose coupling
 
 This unified broker system provides the foundation for all trading operations in the Quantify framework, ensuring consistent behavior across different financial markets and exchanges. 

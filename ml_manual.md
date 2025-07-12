@@ -841,6 +841,91 @@ def live_trading_example():
         time.sleep(60)  # 1-minute intervals
 ```
 
+## Advanced ML Features
+
+The framework now includes advanced machine learning features designed to extract high-alpha signals from market microstructure data. These features work on top of existing trained models and provide sophisticated analysis capabilities.
+
+### Overview of Advanced Features
+
+1. **Order Book Imbalance Momentum**: Analyzes weighted imbalance across multiple order book depth levels with exponential decay
+2. **Microstructure Regime Classification**: Identifies accumulation/distribution/neutral regimes using HMM and gradient boosting
+3. **Liquidity Provision Patterns**: Detects when market makers are "stepping away" before significant moves
+4. **Advanced ML Feature Engine**: Orchestrates all modules and generates interaction features
+
+### Quick Start with Advanced Features
+
+```python
+from src.ml.order_flow_analyzer import OrderFlowAnalyzer
+
+# Enable advanced features
+config = {
+    'model_type': 'xgboost',
+    'enable_advanced_features': True,
+    'advanced_features_config_path': 'config/ml/advanced_features_config.yaml'
+}
+
+analyzer = OrderFlowAnalyzer(config)
+
+# Get comprehensive analysis
+analysis = analyzer.get_advanced_analysis(
+    order_book_data=order_book,
+    trade_data=recent_trades,
+    market_data=market_data
+)
+
+# Get high-alpha trading opportunities
+opportunities = analyzer.get_alpha_opportunities(
+    order_book_data=order_book,
+    trade_data=recent_trades,
+    market_data=market_data
+)
+```
+
+### Benefits of Advanced Features
+
+- **Forward-Looking Signals**: Use order book data instead of lagging price indicators
+- **Regime Adaptation**: Automatically adjust to changing market conditions
+- **Liquidity Awareness**: Account for market liquidity in trading decisions
+- **High-Alpha Potential**: Extract sophisticated signals from market microstructure
+
+### Configuration
+
+Create `config/ml/advanced_features_config.yaml`:
+
+```yaml
+advanced_features:
+  # Order Book Imbalance Momentum
+  order_book_imbalance:
+    max_depth_levels: 10
+    distance_decay_rate: 0.1
+    momentum_window: 20
+    exponential_decay_factor: 0.95
+    
+  # Microstructure Regime Classification
+  regime_classification:
+    hmm_components: 5
+    feature_window: 100
+    min_regime_duration: 30
+    
+  # Liquidity Provision Patterns
+  liquidity_patterns:
+    spread_window: 50
+    depth_levels: 5
+    mm_confidence_threshold: 0.3
+    
+  # Feature Engine
+  feature_engine:
+    enable_parallel_processing: true
+    confidence_threshold: 0.6
+```
+
+### Detailed Documentation
+
+For comprehensive documentation on using advanced ML features:
+
+- **[Advanced ML Features Guide](ML/advanced_ml_features_guide.md)**: Complete guide with examples and best practices
+- **[Advanced ML Features Quick Reference](ML/advanced_ml_features_quick_reference.md)**: Quick reference with code snippets and common patterns
+
 ### Best Practices for Live Trading
 
 1. **Data Quality**
