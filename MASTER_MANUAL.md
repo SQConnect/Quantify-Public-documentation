@@ -7,12 +7,12 @@ This document provides a comprehensive guide to the Quantify Trading Framework. 
 Quantify is a sophisticated, event-driven trading analytics platform designed for the rapid development and deployment of algorithmic trading strategies. It combines advanced machine learning, sentiment analysis, real-time data processing, and comprehensive risk management to provide a complete solution for quantitative trading.
 
 ### Key Features
-- **Event-Driven Architecture**: A powerful core event bus for handling everything from market data to order notifications.
+- **Event-Driven Architecture**: A powerful core event bus for handling everything from market data to order notifications, including DOM (Depth of Market) and advanced event types.
 - **Centralized Strategy Management**: A robust framework for running multiple strategies concurrently, managed via a CLI or direct database commands.
 - **Real-time Monitoring**: Live health, performance, and resource monitoring for all running strategies.
 - **Multi-Asset Support**: Built-in support for equities, options, and futures.
-- **Advanced Analysis**: Integrated tools for technical analysis, pattern recognition, and options greeks.
-- **Broker Integration**: A modular broker interface to connect to various exchanges and data providers.
+- **Advanced Analysis**: Integrated tools for technical analysis, pattern recognition, options greeks, and order flow analysis.
+- **Broker Integration**: A modular broker interface to connect to various exchanges and data providers, with broker-side normalization and sorting for futures chains.
 - **Database Control**: Interact with and control strategies by inserting commands into a central database.
 
 ---
@@ -86,6 +86,29 @@ execution:
   enabled: true
 ```
 
+#### Strategy Configuration (YAML)
+Each strategy is defined by its own YAML configuration file, typically located in `config/strategies/`. This file contains all the parameters the strategy needs to operate, including new fields for DOM and broker-specific features.
+
+Example: `config/strategies/eth_elliott.yaml`
+```yaml
+strategy:
+  name: "ElliottWaveStrategy"
+  class: "ElliottWaveStrategy"
+  module: "src.strategies.elliott_wave_strategy"
+  instance_id: "ETH_ELLIOTT_01"
+  broker: "kraken"
+  # Strategy-specific parameters
+  params:
+    symbol: "ETH/USD"
+    timeframe: "1m"
+    wave_lookback: 100
+    risk_per_trade: 0.01
+    min_volume: 10
+    subscribe_dom: true  # <-- New: subscribe to DOM events
+    dom_symbols:
+      - "ETHUSD"
+```
+
 ### 2.3. Running the Framework
 
 The framework is operated via the command-line interface (CLI) in `main.py`.
@@ -100,8 +123,6 @@ You will see logs indicating that the strategies have been deployed and are conn
 ---
 
 ## 3. Core Concepts
-
-This section explains the fundamental building blocks of the Quantify framework.
 
 ### 3.1. The Strategy Factory
 
@@ -120,43 +141,29 @@ The framework is built on an **event-driven architecture**. Instead of component
 
 A `Strategy` subscribes to the events it cares about, and the framework's core systems (like a `Broker`) publish events as they occur.
 
-#### Key Event Types (`src/core/events.py`)
-- **`OHLCEvent`**: Published when a new candlestick (Open, High, Low, Close) is available for an asset. This is the most common event for strategies to consume.
+#### Key Event Types (see `src/data/event_types.py`)
+- **`CandleEvent`**: Published when a new candlestick (Open, High, Low, Close) is available for an asset. This is the most common event for strategies to consume.
+- **`DOMEvent`**: Published when new depth-of-market (order book) data is available. Used for order flow and advanced strategies.
 - **`SignalEvent`**: Published by a `Strategy` when it identifies a trading opportunity. This event signals the desire to place an order.
 - **`OrderEvent`**: Published by a `Broker` to provide updates on the status of an order (e.g., created, filled, cancelled).
 - **`FillEvent`**: Published by a `Broker` when an order has been executed (fully or partially). This event contains the details of the trade.
 
 #### The Event Flow
-1. A **Broker** (e.g., `KrakenBroker`) receives raw data.
-2. The Broker parses the data and publishes an **`OHLCEvent`** to the event bus.
-3. A **Strategy** subscribed to that event receives it in its `on_candle` (or similar) method.
+1. A **Broker** (e.g., `SaxoBroker`) receives raw data (candles, DOM, etc.).
+2. The Broker parses and normalizes the data, then publishes a **`CandleEvent`** or **`DOMEvent`** to the event bus.
+3. A **Strategy** subscribed to that event receives it in its `on_live_candle` or `on_dom_event` method.
 4. The Strategy's logic analyzes the event. If a trade is warranted, it creates and publishes a **`SignalEvent`**.
 5. The **Execution Manager** receives the `SignalEvent` and translates it into an **`OrderEvent`** sent to the broker.
 6. The **Broker** places the trade and publishes **`OrderEvent`** and **`FillEvent`** updates back to the bus.
 7. The **Portfolio Manager** and the original **Strategy** receive these fill updates to track the position.
 
+#### Event Subscription Pattern
+- **Strategies and components now subscribe to events by event type (e.g., `'depth'` for DOM, `'closed'` for candles) rather than by topic.**
+- Example: `self.event_manager.subscribe('depth', '*', self.on_dom_event, timeframe='*')`
+
 ### 3.3. Strategy Configuration
 
-Each strategy is defined by its own YAML configuration file, typically located in `config/strategies/`. This file contains all the parameters the strategy needs to operate.
-
-Example: `config/strategies/eth_elliott.yaml`
-```yaml
-strategy:
-  name: "ElliottWaveStrategy"
-  class: "ElliottWaveStrategy"
-  module: "src.strategies.elliott_wave_strategy"
-  instance_id: "ETH_ELLIOTT_01"
-  broker: "kraken"
-  # Strategy-specific parameters
-  params:
-    symbol: "ETH/USD"
-    timeframe: "1m"
-    wave_lookback: 100
-    risk_per_trade: 0.01
-    min_volume: 10
-```
-
-This configuration tells the Strategy Factory everything it needs to know to load and run the strategy.
+Each strategy is defined by its own YAML configuration file, typically located in `config/strategies/`. This file contains all the parameters the strategy needs to operate, including DOM and broker-specific fields.
 
 ---
 
@@ -169,7 +176,7 @@ Now that you understand the core concepts, let's build a trading strategy. All s
 The `BaseStrategy` (`src/strategy_framework/base_strategy.py`) is an abstract class that you will extend. It handles the "plumbing" so you can focus on trading logic.
 
 Key responsibilities of `BaseStrategy`:
-- Automatically subscribing to the data feeds defined in your config.
+- Automatically subscribing to the data feeds defined in your config (including DOM if enabled).
 - Managing a "warm-up" period to pre-load historical data.
 - Providing separate handlers for historical and live data.
 - Exposing a simple interface for placing orders.
@@ -178,43 +185,41 @@ Key responsibilities of `BaseStrategy`:
 
 To ensure indicators have enough data to be accurate from the start, the framework enforces a "warm-up" period. During this phase, historical data is fed to your strategy. Once the warm-up is complete for all required timeframes, the strategy transitions to handling live data.
 
-You must implement two key methods to handle this:
+You must implement key methods to handle this:
 
-**`on_historical_candle(self, event: OHLCEvent)`**
-- **When it's called**: For every single candle during the initial warm-up phase.
-- **What to do here**: Use this data to populate your indicators and data structures. For example, if you're using a 20-period moving average, this is where you feed it the first 20+ candles.
-- **What NOT to do here**: Do not generate trading signals or place orders.
-
-**`on_candle(self, event: OHLCEvent)`**
-- **When it's called**: Only *after* the warm-up period is complete. This method is called for every new live candle. (Note: The method is named `on_candle`, not `on_live_candle`).
+**`on_live_candle(self, event: CandleEvent)`**
+- **When it's called**: For every new live candle after warm-up.
 - **What to do here**: This is where your main trading logic lives. Analyze the latest candle, check your indicators, and decide whether to place a trade.
 
-### 4.3. Working with Candle Data
+**`on_dom_event(self, event: DOMEvent)`**
+- **When it's called**: For every new DOM (order book) event if DOM subscription is enabled.
+- **What to do here**: Analyze order flow, depth, and liquidity for advanced strategies.
 
-Inside your strategy, you have access to a rich set of candle data. The `BaseStrategy` provides a `self.datastreams` object, which is a dictionary holding `DataStream` objects for each symbol and timeframe combination.
+### 4.3. Working with Candle and DOM Data
+
+Inside your strategy, you have access to a rich set of candle and DOM data. The `BaseStrategy` provides access to recent candles and order book events for each symbol and timeframe combination.
 
 ```python
 # Get the most recent candle for a symbol/timeframe
-latest_candle = self.datastreams[("ETH/USD", "1m")].get_latest_candle()
+latest_candle = self.get_latest_candle(symbol, timeframe)
 
 # Get the last 100 candles as a list
-candles = self.datastreams[("ETH/USD", "1m")].get_candles(lookback=100)
+df = self.get_dataframe(symbol, timeframe, lookback=100)
 
-# Get the last 100 candles as a Pandas DataFrame for analysis
-df = self.datastreams[("ETH/USD", "1m")].get_candles_as_df(lookback=100)
-# df columns: ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+# DOM event handler
+async def on_dom_event(self, event: DOMEvent):
+    print(f"Received DOM event for {event.symbol}: {event}")
 ```
 
 ### 4.4. Using Technical Indicators
 
 The framework includes a rich library of technical indicators that are easy to integrate into your strategy.
 
-1.  **Import and Initialize**: In your strategy's `__init__` method, import the candle indicators and initialize the ones you need. They are found in `src/indicators/candle_indicators.py`.
-2.  **Update with Candles**: In `on_historical_candle` and `on_candle`, pass the new candle data to your indicator instances to keep them updated.
-3.  **Check Values**: In `on_candle`, check the latest value of your indicator to make trading decisions.
+1.  **Import and Initialize**: In your strategy's `__init__` method, import the candle indicators and initialize the ones you need.
+2.  **Update with Candles**: In `on_live_candle`, pass the new candle data to your indicator instances to keep them updated.
+3.  **Check Values**: In `on_live_candle`, check the latest value of your indicator to make trading decisions.
 
 ```python
-# In your strategy file...
 from src.indicators.candle_indicators import CandleRSI, CandleEMA
 
 class MyMomentumStrategy(BaseStrategy):
@@ -224,21 +229,12 @@ class MyMomentumStrategy(BaseStrategy):
         self.ema_fast = CandleEMA(period=50)
         self.ema_slow = CandleEMA(period=200)
 
-    async def on_historical_candle(self, event: OHLCEvent):
-        # Update indicators with historical data
+    async def on_live_candle(self, event: CandleEvent):
         candle_data = event.candle
         self.rsi.add_candle(candle_data)
         self.ema_fast.add_candle(candle_data)
         self.ema_slow.add_candle(candle_data)
 
-    async def on_candle(self, event: OHLCEvent):
-        # Update indicators with live data
-        candle_data = event.candle
-        self.rsi.add_candle(candle_data)
-        self.ema_fast.add_candle(candle_data)
-        self.ema_slow.add_candle(candle_data)
-
-        # Check if indicators are ready (warmed up)
         if not self.rsi.is_ready() or not self.ema_slow.is_ready():
             return
 
@@ -260,29 +256,6 @@ For more complex analysis, you can use the built-in pattern recognition library 
 2.  **Feed it Data**: On each new candle, get a DataFrame of your recent candles and pass it to one of the detection methods.
 3.  **Act on Results**: The detector will return a result object if a pattern is found, including a confidence score.
 
-```python
-from src.technical_analysis.pattern_recognition import PatternRecognition
-
-# In your strategy...
-class MyPatternStrategy(BaseStrategy):
-    def __init__(self, instance_id, config):
-        super().__init__(instance_id, config)
-        self.pattern_recognizer = PatternRecognition()
-
-    async def on_candle(self, event: OHLCEvent):
-        # Get candles as a DataFrame
-        df = self.datastreams[(event.symbol, event.timeframe)].get_candles_as_df()
-        
-        if len(df) < 50: # Need enough data for patterns
-            return
-
-        # Detect patterns
-        head_and_shoulders = self.pattern_recognizer.detect_head_and_shoulders(df)
-        if head_and_shoulders and head_and_shoulders.confidence > 0.7:
-            print(f"Detected Head and Shoulders with confidence: {head_and_shoulders.confidence}")
-            # Generate a sell signal
-```
-
 ### 4.6. Placing Orders
 
 When your logic determines it's time to trade, you need to generate a `SignalEvent`. The `ExecutionManager` will listen for this event and handle the order placement with the appropriate broker.
@@ -290,15 +263,13 @@ When your logic determines it's time to trade, you need to generate a `SignalEve
 To make this easy, the `BaseStrategy` provides a helper method: `_generate_signal`.
 
 ```python
-# Inside your on_candle method...
+# Inside your on_live_candle method...
 if crossover_buy_signal and rsi_oversold:
     await self._generate_signal(
         signal_type="LONG",       # "LONG", "SHORT", "EXIT_LONG", "EXIT_SHORT"
         target_price=event.candle['close']
     )
 ```
-
-This is the final piece. The signal will be picked up, converted to an order, and sent to the exchange. Your strategy will then receive `FillEvent` updates to track the position.
 
 ---
 
@@ -312,10 +283,14 @@ The `BrokerFactory` (`src/broker_interface/broker_factory.py`) simplifies the cr
 ### 5.2. Supported Brokers
 The framework supports several brokers, including:
 - **Kraken**: For cryptocurrencies.
-- **Saxo Bank**: For stocks, forex, commodities, and options.
+- **Saxo Bank**: For stocks, options, futures, forex, bonds, ETFs.
 - **Interactive Brokers**: For stocks, options, and futures.
 - **Binance**: For cryptocurrencies.
 - **MockBroker**: A simulated broker for testing without connecting to a live exchange.
+
+#### Broker-Side Normalization and Sorting
+- **Futures chains are now always sorted by expiry in the broker.** Strategies should not sort chains themselves.
+- **DOM data is normalized in the broker and published as `DOMEvent` with `event_type='depth'`.**
 
 Configuration for each broker is handled via environment variables (`.env` file) and your strategy's YAML file.
 
@@ -403,7 +378,7 @@ The options framework (`src/options/`) provides a powerful set of tools for defi
 
 The futures framework (`src/futures/`) provides tools for trading futures contracts, including complex multi-leg spreads.
 
-- **`FuturesHelper`**: This is the main interface for fetching futures contract chains and placing orders.
+- **`FuturesHelper`**: This is the main interface for fetching futures contract chains and placing orders. Chains are always sorted by expiry in the broker.
 - **Built-in Spreads**: The framework has built-in support for common futures spreads:
     - **Calendar Spreads**: Trading the futures curve shape.
     - **Intermarket Spreads**: Trading related commodities (e.g., WTI vs. Brent Crude).
@@ -426,6 +401,402 @@ The framework includes a comprehensive machine learning module (`src/ml/`) for b
 
 ---
 
+## 8.1. Three-Tier Democratic AI Voting System
+
+The Quantify framework implements a sophisticated three-tier democratic AI voting system that combines ensemble learning, cross-model voting, and reinforcement learning for robust decision-making.
+
+### 8.1.1. System Architecture
+
+The voting system operates on three tiers:
+
+#### **Tier 1: Ensemble Models (Futures Price Prediction)**
+- **Multiple LSTM Models**: Standard, Bidirectional, and Deep architectures
+- **Individual Model Votes**: Each LSTM model casts its own vote
+- **Ensemble Vote**: Combined prediction from all models with uncertainty quantification
+- **Real-time Adaptation**: Models automatically retrain based on performance
+
+#### **Tier 2: Cross-Model Voting (Democratic Process)**
+- **All Models Vote**: Order flow, regime detection, anomaly detection, dark pool analysis, AND ensemble models
+- **Democratic Process**: Each model gets equal voting rights initially
+- **Vote Tallying**: Aggregates all votes by topic with confidence weighting
+- **Transparent Decision Making**: Complete visibility into how each model voted
+
+#### **Tier 3: RL Agent (Final Decision Maker)**
+- **Learns from All Votes**: Takes the vote tally as input to state vector
+- **Makes Final Decision**: Uses learned policy to decide action (buy/sell/hold)
+- **Feedback Loop Learning**: Learns from trading outcomes and vote accuracy
+- **Adaptive Policy**: Continuously improves decision-making based on results
+- **Risk Management**: Considers confidence levels and uncertainty scores
+
+### 8.1.2. How the Voting System Works
+
+The voting system is **fully automatic** and **seamlessly integrated** with the prediction process. Here's how it works:
+
+#### **Automatic Voting Design:**
+```python
+# ✅ Automatic voting - No client intervention needed
+prediction = await futures_client.predict_price(ticker, market_data)
+# Votes are automatically cast in the background!
+```
+
+**How it works:**
+1. **Client makes prediction**: Calls `predict_price()` with market data
+2. **Automatic vote casting**: Handler automatically casts votes for ensemble and individual models
+3. **Voting system integration**: Votes are stored in the voting system
+4. **RL agent access**: RL agent can access all votes for decision making
+5. **Transparent process**: Client gets prediction, voting happens seamlessly
+
+#### **Why This Design is Better:**
+1. **Zero Client Code**: No additional client code required for voting
+2. **Guaranteed Voting**: Every prediction automatically casts votes
+3. **Seamless Integration**: Voting is transparent to the client
+4. **Reliable**: No risk of forgetting to cast votes
+5. **Production Ready**: Works out of the box without manual intervention
+
+### 8.1.3. Implementation Details
+
+The voting system is **automatically integrated** into the prediction process:
+
+```python
+class FuturesPricePredictionHandler(BaseHandler):
+    async def _handle_predict_price(self, ticker: str, predictor, payload):
+        # 1. Make prediction
+        prediction = predictor.predict(market_data)
+        
+        # 2. Automatically cast votes (no client involvement needed)
+        auto_cast_enabled = self.config.get('auto_cast_votes', True)
+        if auto_cast_enabled:
+            await self._auto_cast_votes(ticker, prediction, predictor, market_data)
+        
+        # 3. Return prediction to client
+        return {'success': True, 'prediction': prediction.to_dict()}
+    
+    async def _auto_cast_votes(self, ticker: str, prediction, predictor, market_data):
+        """Automatically cast votes when prediction is made."""
+        # Cast ensemble vote
+        ensemble_vote = Vote(
+            voter_name=f"FuturesPricePrediction_Ensemble_{ticker}",
+                            vote_topic=f"trade_decision_{ticker}",
+            prediction=prediction.position_flag,
+            confidence=prediction.confidence_score
+        )
+        
+        # Cast individual model votes (if multiple models)
+        for model_name in predictor.models.keys():
+            individual_pred = predictor._get_individual_model_prediction(model_name, market_data)
+            if individual_pred:
+                individual_vote = Vote(
+                    voter_name=f"FuturesPricePrediction_{model_name}_{ticker}",
+                    vote_topic=f"trade_decision_{ticker}",
+                    prediction=individual_pred['position_flag'],
+                    confidence=individual_pred['confidence']
+                )
+                # Cast vote automatically
+                await voting_client.cast_vote(individual_vote)
+```
+
+### 8.1.4. Usage Examples
+
+#### **Simple Usage (Automatic Voting):**
+```python
+# Client just makes prediction - voting happens automatically
+prediction = await futures_client.predict_price("BTC-USD", market_data)
+print(f"Prediction: {prediction['position_flag']}")
+print(f"Confidence: {prediction['confidence_score']}")
+# Votes are automatically cast in the background!
+```
+
+#### **RL Agent Integration:**
+```python
+# RL agent automatically accesses all votes for decision making
+rl_decision = await rl_client.decide_action({
+    'ticker': 'BTC-USD',
+    'vote_topic': 'futures_price_direction',
+    'market_data': market_data
+})
+
+print(f"RL Agent Decision: {rl_decision['action']}")
+print(f"Confidence: {rl_decision['confidence']}")
+print(f"Reasoning: {rl_decision['reasoning']}")
+```
+
+#### **Vote Monitoring (Optional):**
+```python
+# Monitor votes if needed (optional)
+vote_tally = await voting_client.tally_votes(f"trade_decision_{ticker}")
+print(f"Total votes: {vote_tally['total_votes']}")
+print(f"Futures prediction votes: {len(vote_tally['futures_price_votes'])}")
+```
+
+### 8.1.5. Key Benefits
+
+1. **Zero Client Code**: No additional client code required for voting
+2. **Automatic Integration**: Votes cast immediately when predictions are made
+3. **RL Agent Ready**: Seamless integration with existing RL agent
+4. **Transparent Process**: Complete visibility into decision-making
+5. **Scalable Architecture**: Easy to add new models to the voting system
+6. **Production Ready**: Works out of the box without manual intervention
+7. **Risk Management**: Uncertainty quantification and confidence weighting
+
+### 8.1.6. Configuration
+
+The voting system is configured in `config/main.yaml`:
+
+```yaml
+ml_service:
+  futures_price_prediction:
+    # Ensemble configuration
+    ensemble_size: 3
+    model_types: ['standard', 'bidirectional', 'deep']
+    
+    # Voting configuration
+    voting_config:
+      auto_cast_votes: true  # Enable automatic voting
+      vote_topic: "trade_decision_{ticker}"  # Dynamic vote topic per ticker
+      include_individual_votes: true  # Cast votes from individual ensemble models
+    
+    # Performance monitoring
+    adaptation_threshold: 0.1
+    performance_window: 100
+```
+
+### 8.1.7. Complete Workflow
+
+Here's the complete workflow from prediction to RL agent decision:
+
+1. **Client makes prediction**:
+   ```python
+   prediction = await futures_client.predict_price("BTC-USD", market_data)
+   ```
+
+2. **Automatic vote casting** (happens in background):
+   - Ensemble vote is cast
+   - Individual model votes are cast
+   - Votes stored in voting system
+
+3. **RL agent accesses votes**:
+   ```python
+   rl_decision = await rl_client.decide_action({
+       'ticker': 'BTC-USD',
+       'vote_topic': 'futures_price_direction'
+   })
+   ```
+
+4. **RL agent makes final decision**:
+   - Converts vote tally to state vector
+   - Applies learned policy
+   - Returns final action (buy/sell/hold)
+   - **Learns from feedback**: Trading outcomes improve future decisions
+
+This creates a **truly democratic AI trading system** where multiple intelligent agents vote on decisions, and a reinforcement learning agent learns from their collective wisdom and trading outcomes to continuously improve decision-making.
+
+### 8.1.9. Fully Self-Learning ML Chain
+
+The Quantify framework implements a **complete autonomous self-learning ML chain** where every component learns and adapts:
+
+#### **Multi-Level Autonomous Learning:**
+
+**🔹 Level 1: Individual Model Learning**
+- **LSTM Models**: Automatically retrain based on new data and performance
+- **Feature Engineering**: Adapts to changing market patterns
+- **Model Architecture**: Can switch between different LSTM types based on performance
+- **Hyperparameter Optimization**: Self-adjusts learning rates, batch sizes, etc.
+
+**🔹 Level 2: Ensemble Learning**
+- **Model Weighting**: Automatically adjusts weights based on individual model performance
+- **Ensemble Composition**: Can add/remove models based on effectiveness
+- **Uncertainty Quantification**: Learns to measure prediction confidence
+- **Adaptive Voting**: Adjusts voting strategy based on market conditions
+
+**🔹 Level 3: Cross-Model Voting Learning**
+- **Vote Reliability**: Learns which models are most reliable in different conditions
+- **Confidence Weighting**: Adjusts vote importance based on historical accuracy
+- **Market Regime Adaptation**: Different voting strategies for different market conditions
+- **Model Diversity**: Maintains diverse model types for robust predictions
+
+**🔹 Level 4: RL Agent Learning**
+- **Policy Optimization**: Continuously improves decision-making policy
+- **Reward Learning**: Adapts reward function based on trading outcomes
+- **State Representation**: Learns optimal ways to represent market state
+- **Action Selection**: Optimizes action selection based on vote patterns
+
+**🔹 Level 5: System-Level Adaptation**
+- **Performance Monitoring**: Tracks accuracy, profit factor, Sharpe ratio
+- **Automatic Retraining**: Triggers retraining when performance degrades
+- **Resource Optimization**: Manages memory and computational resources
+- **Risk Management**: Learns optimal risk parameters
+
+#### **Complete Autonomous Cycle:**
+
+```python
+# The system runs this cycle continuously:
+while True:
+    # 1. Collect market data
+    market_data = get_latest_market_data()
+    
+    # 2. Individual models learn and predict
+    for model in ensemble_models:
+        model.adapt_to_new_data(market_data)
+        prediction = model.predict(market_data)
+    
+    # 3. Ensemble learns optimal combination
+    ensemble.learn_optimal_weights(predictions, historical_accuracy)
+    ensemble_prediction = ensemble.combine_predictions(predictions)
+    
+    # 4. Voting system learns from all models
+    voting_system.cast_votes(all_model_predictions)
+    voting_system.learn_vote_reliability(historical_outcomes)
+    
+    # 5. RL agent learns optimal decision policy
+    rl_agent.observe_votes(vote_tally)
+    action = rl_agent.decide_action(vote_tally)
+    
+    # 6. Execute trade and observe outcome
+    trade_result = execute_trade(action)
+    
+    # 7. All components learn from outcome
+    for model in ensemble_models:
+        model.learn_from_outcome(trade_result)
+    
+    voting_system.learn_from_outcome(trade_result)
+    rl_agent.learn_from_outcome(trade_result)
+    
+    # 8. System adapts overall strategy
+    system.adapt_strategy(performance_metrics)
+```
+
+#### **Self-Learning Capabilities:**
+
+**🎯 Autonomous Decision Making:**
+- No human intervention required for learning
+- Self-optimizing parameters and strategies
+- Automatic adaptation to market changes
+
+**🧠 Continuous Intelligence:**
+- Gets smarter with every trade
+- Learns from both successes and failures
+- Adapts to new market conditions
+
+**📈 Performance Optimization:**
+- Self-monitoring and self-improving
+- Automatic retraining when needed
+- Resource optimization and management
+
+**🔄 Full Feedback Loop:**
+- Every component learns from outcomes
+- Cross-component learning and adaptation
+- System-wide optimization
+
+This creates a **truly autonomous, self-learning AI trading system** that continuously improves itself at every level without human intervention.
+
+### 8.1.8. Automatic Feedback Loop Learning
+
+The system implements a **fully automatic feedback loop** that eliminates the need for client-side reward handling:
+
+#### **Automatic Learning Process:**
+
+1. **Prediction Tracking**: Every prediction is automatically tracked for feedback
+2. **Vote Collection**: RL agent receives votes from all models
+3. **Decision Making**: Applies current policy to make trading decision
+4. **Action Execution**: Execute trade based on decision
+5. **Outcome Capture**: Trade results automatically captured from broker
+6. **Reward Calculation**: System automatically calculates reward based on P&L
+7. **Automatic Feedback**: Feedback automatically provided to all components
+8. **Policy Update**: RL agent updates policy automatically
+9. **Model Adaptation**: Ensemble models adapt automatically
+
+#### **Zero Client Intervention Required:**
+
+**❌ Old Way (Client Responsibility):**
+```python
+# Client had to manually:
+1. Track predictions
+2. Monitor trade outcomes  
+3. Calculate rewards
+4. Send feedback to RL agent
+5. Update model performance
+6. Handle learning cycles
+```
+
+**✅ New Way (Fully Automatic):**
+```python
+# Client only needs to:
+1. Make prediction
+2. Execute trade
+3. That's it! Everything else is automatic
+```
+
+#### **Automatic Reward Calculation:**
+```python
+def _calculate_trade_reward(self, trade_result: Dict[str, Any]) -> float:
+    """Calculate reward based on trade outcome."""
+    pnl = trade_result.get('pnl', 0.0)
+    action = trade_result.get('action', '')
+    
+    # Base reward on P&L
+    if pnl > 0:
+        reward = min(1.0, pnl * 10)  # Scale positive P&L to reward
+    elif pnl < 0:
+        reward = max(-1.0, pnl * 10)  # Scale negative P&L to penalty
+    else:
+        reward = 0.0
+    
+    # Adjust reward based on action type
+    if action in ['buy', 'sell'] and abs(pnl) > 0.001:  # Significant trade
+        reward *= 1.2  # Boost reward for decisive actions
+    elif action == 'hold' and abs(pnl) < 0.001:  # Good hold decision
+        reward *= 0.8  # Moderate reward for avoiding losses
+    
+    return reward
+```
+
+#### **Automatic Feedback Provision:**
+```python
+# System automatically provides feedback to:
+1. RL Agent: Updates Q-values and policy
+2. Ensemble Models: Updates performance metrics
+3. Voting System: Learns vote reliability
+4. System Level: Adapts overall strategy
+```
+
+#### **Example Automatic Learning Cycle:**
+```python
+# 1. Make prediction (automatically tracked)
+prediction = await futures_client.predict_price("BTC-USD", market_data)
+
+# 2. Execute trade based on prediction
+action = prediction.rl_decision or prediction.position_flag
+trade_result = await execute_trade(action)
+
+# 3. Provide trade outcome (automatic feedback triggered)
+await futures_client.provide_automatic_feedback("BTC-USD", {
+    'trade_id': 'trade_123',
+    'action': action,
+    'pnl': 0.025,  # 2.5% profit
+    'timestamp': '2024-01-01T10:00:00'
+})
+
+# 4. System automatically:
+#    - Calculates reward (+0.25)
+#    - Updates RL agent policy
+#    - Adapts ensemble models
+#    - Improves voting system
+#    - Triggers model retraining if needed
+```
+
+#### **Benefits of Automatic Feedback:**
+- **✅ Zero Client Code**: No feedback handling required
+- **✅ No Risk of Forgetting**: Automatic tracking ensures no missed feedback
+- **✅ Simplified Architecture**: Single function handles all feedback types
+- **✅ Clean Code**: No complex multi-function chains
+- **✅ Easy Maintenance**: Simple, readable feedback logic
+- **✅ Consistent Rewards**: Standardized reward calculation
+- **✅ Self-Improving**: Models automatically get better
+- **✅ Production Ready**: Reliable and robust
+- **✅ Scalable**: Works for any number of trades
+
+---
+
 ## 9. Visualization & Dashboards
 
 Understanding your strategy's performance and market data is critical. The `UnifiedVisualizer` (`src/visualization/unified_visualizer.py`) uses Plotly to create rich, interactive charts.
@@ -436,6 +807,7 @@ You can plot:
 - **Technical indicators** overlaid on the price or in subplots.
 - **Elliott Wave** patterns and Fibonacci levels.
 - **Strategy performance**, including equity curves and drawdown.
+- **Order Flow/DOM**: Visualize order book depth and synthetic orders (if enabled).
 
 ### 9.2. Exporting
 Charts can be saved as interactive **HTML** files or as static **PNG** images, perfect for reports and analysis.
@@ -563,6 +935,8 @@ The framework includes comprehensive Saxo Bank integration with advanced feature
 - **Advanced Order Types**: Support for algorithmic orders and complex strategies
 - **Market Data Entitlements**: Proper handling of market data permissions
 - **Error Handling**: Comprehensive error handling with correlation tracking
+- **DOM Support**: Real-time DOM (order book) data, normalized and published as `DOMEvent` with `event_type='depth'`.
+- **Futures Chain Sorting**: All futures chains are sorted by expiry in the broker.
 
 #### Configuration:
 ```yaml

@@ -376,4 +376,320 @@ take_profit_pct: 0.10
 
 # ... any other parameters your strategy needs
 ```
-You must then add the path to this file to the `strategies` list in `config/main.yaml` for it to be loaded at startup, or deploy it at runtime using the `add-strategy` command. 
+You must then add the path to this file to the `strategies` list in `config/main.yaml` for it to be loaded at startup, or deploy it at runtime using the `add-strategy` command.
+
+---
+
+## 7. Microservice Architecture
+
+The Quantify framework is built on a robust microservice architecture that provides modularity, scalability, and fault isolation. Each service operates independently and communicates through standardized interfaces.
+
+### 7.1. Service Overview
+
+The framework consists of several specialized microservices, each handling specific aspects of the trading system:
+
+#### **Main Trading Execution Service**
+- **Purpose**: Core trading logic, strategy execution, and order management
+- **Port**: 5555 (default)
+- **Key Components**:
+  - Strategy Factory and Runner
+  - Order Manager
+  - Position Manager
+  - Event Manager
+  - Broker Interface
+- **Responsibilities**:
+  - Strategy lifecycle management
+  - Order placement and tracking
+  - Position monitoring
+  - Market data distribution
+  - Risk management integration
+
+#### **Risk Management Service**
+- **Purpose**: Real-time risk monitoring and control
+- **Port**: 5557 (default)
+- **Key Features**:
+  - Margin call monitoring
+  - Assignment risk assessment
+  - Real-time assignment notifications
+  - Portfolio-wide risk controls
+  - Automatic position reduction on margin breaches
+- **Integration**: Automatically connects to Position Manager and Order Manager
+- **Documentation**: See `docs/risk_management.md` for detailed usage
+
+#### **Data Service**
+- **Purpose**: Historical data management and market data aggregation
+- **Port**: 5556 (default)
+- **Key Features**:
+  - Historical data storage and retrieval
+  - Real-time data streaming
+  - Data normalization across brokers
+  - Candle management and OHLC data
+  - Market data caching and optimization
+
+#### **News Service**
+- **Purpose**: News aggregation and sentiment analysis
+- **Port**: 5558 (default)
+- **Key Features**:
+  - Real-time news feeds
+  - Sentiment analysis
+  - News filtering by symbols
+  - Impact assessment
+  - Historical news storage
+
+#### **Machine Learning Service**
+- **Purpose**: AI/ML model management and predictions
+- **Port**: 5559 (default)
+- **Key Features**:
+  - Model training and deployment
+  - Real-time predictions
+  - Feature engineering
+  - Model performance monitoring
+  - Automated model updates
+
+### 7.2. Service Communication
+
+All microservices communicate using a standardized protocol:
+
+#### **Message Format**
+```json
+{
+  "command": "command_name",
+  "ticker": "optional_ticker_or_account",
+  "payload": {
+    "parameter1": "value1",
+    "parameter2": "value2"
+  }
+}
+```
+
+#### **Response Format**
+```json
+{
+  "status": "success|error",
+  "message": "Human readable message",
+  "data": {
+    "result_data": "value"
+  }
+}
+```
+
+### 7.3. Service Management
+
+#### **Starting Services**
+
+All services can be started using the `quantify.sh` script:
+
+```bash
+# Start all services
+./quantify.sh start
+
+# Start specific services
+./quantify.sh start --services main,risk,data
+
+# Start in daemon mode
+./quantify.sh start --daemon
+```
+
+#### **Service Configuration**
+
+Each service has its own configuration section in `config/main.yaml`:
+
+```yaml
+# Main trading service configuration
+main_service:
+  server:
+    host: "0.0.0.0"
+    port: 5555
+    use_ipc: false
+    use_binary: false
+
+# Risk management service configuration
+risk_management:
+  server:
+    host: "0.0.0.0"
+    port: 5557
+    use_ipc: false
+    use_binary: false
+  risk_config:
+    margin_threshold: 85.0
+    assignment_monitoring: true
+    auto_position_reduction: true
+
+# Data service configuration
+data_service:
+  server:
+    host: "0.0.0.0"
+    port: 5556
+    use_ipc: false
+    use_binary: false
+
+# News service configuration
+news_service:
+  server:
+    host: "0.0.0.0"
+    port: 5558
+    use_ipc: false
+    use_binary: false
+
+# ML service configuration
+ml_service:
+  server:
+    host: "0.0.0.0"
+    port: 5559
+    use_ipc: false
+    use_binary: false
+```
+
+#### **Service Health Monitoring**
+
+Each service provides health monitoring endpoints:
+
+```bash
+# Check main service health
+curl http://localhost:5555/health
+
+# Check risk service health
+curl http://localhost:5557/health
+
+# Check data service health
+curl http://localhost:5556/health
+```
+
+### 7.4. Service Integration
+
+#### **Automatic Integration**
+
+The main trading service automatically integrates with other services:
+
+- **Risk Management**: Position Manager automatically subscribes to balance and position updates
+- **Data Service**: Candle Manager automatically connects for historical data
+- **News Service**: Event Manager automatically receives news events
+- **ML Service**: Strategies can request predictions through the ML client
+
+#### **Manual Integration**
+
+For custom integrations, use the service clients:
+
+```python
+from src.risk_management.risk_client import RiskManagementClient
+from src.data.data_client import DataClient
+from src.news.news_client import NewsClient
+from src.ml.ml_client import MLClient
+
+# Risk management integration
+risk_client = RiskManagementClient("AAPL")
+await risk_client.subscribe_to_margin_events()
+await risk_client.get_risk_assessment()
+
+# Data service integration
+data_client = DataClient()
+historical_data = await data_client.get_historical_data("AAPL", "1D", limit=100)
+
+# News service integration
+news_client = NewsClient()
+news_events = await news_client.get_news_for_symbol("AAPL")
+
+# ML service integration
+ml_client = MLClient()
+prediction = await ml_client.get_prediction("AAPL", "price_direction")
+```
+
+### 7.5. Service Development
+
+#### **Creating New Services**
+
+To create a new microservice:
+
+1. **Create the service directory**:
+   ```
+   src/your_service/
+   ├── __init__.py
+   ├── main.py
+   ├── handlers/
+   │   └── your_handler.py
+   ├── client.py
+   └── dto.py
+   ```
+
+2. **Implement the handler**:
+   ```python
+   from src.service_framework.base_handler import BaseHandler
+   
+   class YourHandler(BaseHandler):
+       def get_commands(self):
+           return ["command1", "command2"]
+       
+       async def _handle_request_impl(self, command: str, ticker: str, payload: Dict[str, Any]):
+           if command == "command1":
+               return await self._handle_command1(ticker, payload)
+           # ... other commands
+   ```
+
+3. **Create the main entry point**:
+   ```python
+   from src.service_framework.service_host import ServiceHost
+   from src.your_service.handlers.your_handler import YourHandler
+   
+   async def main():
+       service_host = ServiceHost(config)
+       handler = YourHandler()
+       service_host.register_handler(handler)
+       await service_host.start()
+   ```
+
+4. **Add to quantify.sh**:
+   ```bash
+   # Add your service to the start_services function
+   start_your_service() {
+       python -m src.your_service.main &
+       echo $! > /tmp/quantify_your_service.pid
+   }
+   ```
+
+#### **Service Best Practices**
+
+- **Fault Isolation**: Each service should handle its own errors and not crash other services
+- **Stateless Design**: Services should be stateless when possible for easy scaling
+- **Standardized Interfaces**: Use consistent message formats and error handling
+- **Health Checks**: Implement health check endpoints for monitoring
+- **Logging**: Use structured logging for better debugging
+- **Configuration**: Externalize all configuration parameters
+
+### 7.6. Service Scaling
+
+#### **Horizontal Scaling**
+
+Each service can be scaled independently:
+
+```bash
+# Start multiple instances of a service
+./quantify.sh start --service data --instances 3
+./quantify.sh start --service ml --instances 2
+```
+
+#### **Load Balancing**
+
+For high-throughput scenarios, use load balancers:
+
+```yaml
+# Example with load balancer configuration
+data_service:
+  load_balancer:
+    enabled: true
+    instances: 3
+    algorithm: "round_robin"
+```
+
+#### **Service Discovery**
+
+Services automatically discover each other using the service registry:
+
+```python
+# Automatic service discovery
+from src.service_framework.service_registry import ServiceRegistry
+
+registry = ServiceRegistry()
+data_service = await registry.get_service("data_service")
+```
+
+This microservice architecture provides the foundation for a scalable, maintainable, and robust trading system that can handle complex requirements while maintaining clear separation of concerns. 

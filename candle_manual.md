@@ -1,401 +1,345 @@
-# Candle Manual
+# Candle Management Manual
 
-## Table of Contents
-1. [Introduction](#introduction)
-2. [Candle Basics](#candle-basics)
-3. [Data Ingestion](#data-ingestion)
-4. [Event System](#event-system)
-5. [Integrated Candle Management](#integrated-candle-management)
-6. [Candle Consolidation and Resampling](#candle-consolidation-and-resampling)
-7. [Strategy Warm-Up Period](#strategy-warm-up-period)
-8. [Technical Analysis](#technical-analysis)
-9. [Best Practices](#best-practices)
-10. [Examples](#examples)
+## 1. Introduction
 
-## Introduction
+This manual provides a comprehensive guide to working with candle data in the Quantify trading framework. Candles are the cornerstone of most trading strategies, and this framework is designed to make accessing and managing them simple, efficient, and flexible.
 
-This manual provides a comprehensive guide to working with candles in our trading system. Candles are fundamental building blocks for technical analysis and trading strategies, representing price action over specific time periods.
+The core of the system is the **`CandleManager`**, a centralized service that handles all candle creation, buffering, and resampling. This powerful component ensures that all strategies have access to a consistent, single source of truth for market data, eliminating data duplication and simplifying strategy logic.
 
-## Candle Basics
+## 2. Key Concepts
 
-A candle represents price action over a specific timeframe and contains:
-- Open price
-- High price
-- Low price
-- Close price
-- Volume
-- Timestamp
-- VWAP (Volume Weighted Average Price)
-- Number of trades
-- Additional metadata
+### The Centralized `CandleManager`
 
-### Standard Timeframes
-```python
-valid_timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']
-```
+You will never need to interact with the `CandleManager` directly. It works silently in the background, managed by the framework. Here’s what it does for you:
 
-## Data Ingestion
+- **Single Source of Truth**: All candle data for all symbols and timeframes is stored once in an efficient, in-memory buffer.
+- **Automatic Candle Creation**: It ingests live tick or OHLC data from the broker and automatically builds candles for your desired timeframes.
+- **On-the-Fly Resampling**: It can create any higher timeframe from a base timeframe. For example, if you need '5m' and '1h' candles, you only need to subscribe to '1m' data, and the `CandleManager` will build the larger timeframes for you in real-time.
+- **Automatic Warm-Up**: When your strategy starts, the framework automatically pre-loads the `CandleManager`'s buffers with historical data, ensuring your indicators have enough data to be accurate from the very first trade.
 
-The framework has moved away from a generic ZeroMQ-based subscription model towards a more robust, broker-specific data handling approach. Data is now primarily ingested through the active broker's WebSocket or REST API endpoints. This change ensures higher fidelity data and better integration with the broker's ecosystem.
+### Stateless Strategies
 
-When a strategy is initialized, it specifies the required symbols and timeframes. The `BaseStrategy` and the underlying broker implementation handle the subscription and data fetching automatically. Historical data is pre-fetched to warm up the strategy, and live data is streamed subsequently.
+Because the `CandleManager` handles all data storage, your strategies can remain **stateless** regarding candle data. You no longer need to maintain local lists or buffers of candles. You can simply request the data you need, when you need it.
 
-### Configuration
+## 3. Timeframes: Unlimited Flexibility
 
-Data requirements are defined directly in the strategy's configuration file. The `StrategyFactory` uses this configuration to set up the necessary data streams via the designated broker.
+The framework offers complete flexibility for timeframes. While standard timeframes like '1m', '5m', '1h', '1d' are common, you are **not** restricted to them. You can define any custom timeframe in your strategy's configuration.
+
+For example, if you want to work with **14-minute candles**, you simply specify it in your config. The `CandleManager` will automatically generate them for you from a smaller base timeframe.
 
 ```yaml
-# Example from a strategy's config.yaml
-strategy_name: MyAwesomeStrategy
-strategy_class: MyAwesomeStrategy
-base_timeframe: '1m'
-resample_timeframes: ['5m', '15m']
-symbols:
-  - 'XBT/USD'
-  - 'ETH/USD'
-warm_up_period_candles:
-  '1m': 200
-  '5m': 60
+# In your strategy's config.yaml
+timeframes: ['1m', '14m', '1h'] # '14m' is a valid custom timeframe
 ```
 
-## Event System
+The framework will determine the smallest base timeframe required ('1m' in this case) and automatically subscribe to it, resampling to all other requested timeframes.
 
-The candle system supports several types of events that can be subscribed to:
+## 4. Accessing Candle Data in Your Strategy
 
-### Event Types
+Your strategy, which should inherit from `BaseStrategy`, has built-in helper methods to access the `CandleManager`'s data buffers. You should **never** store candles in your strategy instance.
 
-1. **NEW_CANDLE**: Triggered when a new candle is created
-   - Contains the initial candle data
-   - Includes timestamp, OHLCV data, and additional metadata
+### Key Helper Methods
 
-2. **CANDLE_CLOSED**: Triggered when a candle period is complete
-   - Contains the final candle data
-   - Includes all OHLCV data and statistics
+- `self.get_candles(symbol, timeframe, lookback)`: Fetches a list of historical candles.
+- `self.get_current_candle(symbol, timeframe)`: Fetches the most recent, still-forming candle.
+- `self.get_candle_dataframe(symbol, timeframe, lookback)`: Fetches the candles as a pandas DataFrame, ready for analysis with libraries like TA-Lib or pandas_ta.
 
-3. **PRICE_ALERT**: Triggered when price crosses specified levels
-   - Contains the price level and condition that triggered the alert
-   - Includes the current candle data
+## 5. Practical Example: A Simple PMA Strategy
 
-4. **VOLUME_ALERT**: Triggered when volume exceeds thresholds
-   - Contains the volume threshold that was exceeded
-   - Includes the current candle data
+Let's look at a realistic example. Below is a complete `PMAStrategy` that trades based on a price crossover of a Projected Moving Average. Notice that it does **not** have an `__init__` method and does **not** store any candles locally.
 
-5. **PATTERN_DETECTED**: Triggered when technical patterns are identified
-   - Contains the pattern name and details
-   - Includes the relevant candle data
-
-6. **HEARTBEAT**: Regular system status updates
-   - Contains comprehensive system status information
-   - Includes:
-     - Current timestamp
-     - Tick and candle counts
-     - Active symbols and timeframes
-     - Last tick times for each symbol
-     - System health metrics
-
-### Heartbeat System
-
-The heartbeat system provides regular status updates about the candle manager's state. Heartbeats are emitted:
-
-1. **Per Symbol/Timeframe**: Individual heartbeats for each active symbol and timeframe combination
-2. **Global**: A system-wide heartbeat with overall status
-
-#### Heartbeat Data Structure
-```python
-{
-    'timestamp': datetime,  # Current system time
-    'tick_count': int,      # Total number of ticks processed
-    'candle_count': int,    # Total number of candles generated
-    'active_symbols': List[str],  # List of symbols with active data
-    'active_timeframes': List[str],  # List of registered timeframes
-    'last_tick_times': {  # Last tick time for each symbol
-        'symbol': datetime,
-        ...
-    }
-}
-```
-
-### Event Subscription Examples
+### The Strategy Code
 
 ```python
-# Subscribe to new candles
-candle_manager.subscribe_to_events(
-    CandleEventType.NEW_CANDLE,
-    symbol='BTC/USD',
-    timeframe='1m',
-    handler=your_handler
-)
+# src/strategies/my_pma_strategy.py
 
-# Subscribe to candle closures
-candle_manager.subscribe_to_events(
-    CandleEventType.CANDLE_CLOSED,
-    symbol='BTC/USD',
-    timeframe='1m',
-    handler=your_handler
-)
+from ..strategy_framework import BaseStrategy, CandleEvent, Signal
+from ..indicators import ProjectedMovingAverage
 
-# Subscribe to symbol-specific heartbeats
-candle_manager.subscribe_to_events(
-    CandleEventType.HEARTBEAT,
-    symbol='BTC/USD',
-    timeframe='1m',
-    handler=your_handler
-)
-
-# Subscribe to global heartbeats
-candle_manager.subscribe_to_events(
-    CandleEventType.HEARTBEAT,
-    symbol='*',
-    timeframe='*',
-    handler=your_handler
-)
-```
-
-### Event Handler Examples
-
-```python
-async def handle_candle_event(event: CandleEvent):
-    if event.event_type == CandleEventType.NEW_CANDLE:
-        print(f"New candle for {event.symbol} on {event.timeframe}")
-        print(f"Open: {event.candle_data['open']}")
-        print(f"High: {event.candle_data['high']}")
-        print(f"Low: {event.candle_data['low']}")
-        print(f"Close: {event.candle_data['close']}")
-        print(f"Volume: {event.candle_data['volume']}")
-    elif event.event_type == CandleEventType.CANDLE_CLOSED:
-        print(f"Candle closed for {event.symbol} on {event.timeframe}")
-        # Process closed candle data
-
-async def handle_heartbeat(event: CandleEvent):
-    status = event.additional_data
-    print(f"System Status at {status['timestamp']}:")
-    print(f"Active Symbols: {status['active_symbols']}")
-    print(f"Active Timeframes: {status['active_timeframes']}")
-    print(f"Total Ticks: {status['tick_count']}")
-    print(f"Total Candles: {status['candle_count']}")
-```
-
-## Integrated Candle Management
-
-The framework provides integrated candle management through a singleton `EventManager` and a `CandleManager` instance that is injected into each strategy. This ensures that all parts of the application, from data providers to strategies, work from a unified event queue and consistent candle data.
-
-### Accessing the Candle Manager
-
-Within a strategy that inherits from `BaseStrategy`, the `CandleManager` is available as `self.candle_manager`. It is automatically initialized and configured by the `StrategyFactory` during the strategy's creation.
-
-```python
-# No manual instantiation is needed.
-# self.candle_manager is available in your strategy methods.
-
-class YourStrategy(BaseStrategy):
-    async def initialize(self):
-        # The candle manager is ready to be used.
-        self.candle_manager.get_candles(...)
-```
-
-### Accessing Candle Data in Strategies
-
-The `BaseStrategy` provides convenient methods to access candle data managed by the `CandleManager`.
-
-```python
-class YourStrategy(BaseStrategy):
-    async def on_live_candle(self, candle: Candle) -> None:
-        # Get latest candle for a specific symbol and timeframe
-        latest = self.candle_manager.get_latest_candle(candle.symbol, candle.timeframe)
+class PMAStrategy(BaseStrategy):
+    """
+    A simple strategy that uses a Projected Moving Average (PMA)
+    to make trading decisions. It inherits all the necessary components
+    from BaseStrategy.
+    """
+    
+    async def on_live_candle(self, event: CandleEvent):
+        """This is the main logic loop for the strategy."""
         
-        # Get previous candle
-        previous = self.candle_manager.get_previous_candle(candle.symbol, candle.timeframe)
-        
-        # Get last 100 candles
-        candles = self.candle_manager.get_candles(candle.symbol, candle.timeframe, lookback=100)
-        
-        # Get as pandas DataFrame
-        df = self.candle_manager.get_candles_as_df(candle.symbol, candle.timeframe, lookback=100)
+        # We get the symbol, timeframe, and PMA period from the config file.
+        # The framework guarantees we only receive events for the subscribed symbol/timeframe.
+        symbol = self.config.get('symbol')
+        timeframe = self.config.get('timeframe')
+        pma_period = self.config.get('pma_period', 20)
+
+        # Fetch the last `pma_period` candles from the CandleManager
+        candles = self.get_candles(symbol, timeframe, lookback=pma_period)
+
+        if len(candles) < pma_period:
+            self.logger.info(f"Warming up... Need {pma_period} candles, have {len(candles)}.")
+            return
+
+        # Calculate the PMA value
+        closes = [float(c.close) for c in candles]
+        pma_indicator = ProjectedMovingAverage(period=pma_period)
+        pma_value = pma_indicator.calculate(closes)
+
+        if pma_value is None:
+            return
+
+        # Basic Crossover Logic
+        current_price = float(event.candle.close)
+        if current_price > pma_value:
+            await self.place_order(
+                symbol=symbol,
+                side='buy',
+                quantity=self.config.get('order_size', 1.0)
+            )
+        elif current_price < pma_value:
+            await self.place_order(
+                symbol=symbol,
+                side='sell',
+                quantity=self.config.get('order_size', 1.0)
+            )
 ```
 
-## Candle Consolidation and Resampling
+## 6. Buffer Preheating: Instant Strategy Start
 
-A key feature of the `CandleManager` is its ability to resample a base timeframe (e.g., 1-minute candles) into multiple larger timeframes (e.g., 5-minute, 15-minute). This is done efficiently in real-time as new data arrives.
+One of the most powerful features of the centralized candle management system is **buffer preheating**. This allows your strategies to start trading immediately without waiting for live candles to accumulate.
 
-The resampling process is now handled through a robust three-pass system designed to correctly process historical data snapshots and then transition smoothly to live data.
+### What is Preheating?
 
-### Three-Pass System for Historical Data
+Preheating fills the `CandleManager`'s buffers with historical data from your broker before your strategy starts trading. This means:
 
-When a strategy starts, it needs a "warm-up" period with historical data. The `CandleManager` uses a special process to ensure this data is loaded and resampled correctly before live trading begins.
+- **No Warm-Up Wait**: Your strategy can start trading immediately with full historical context
+- **Accurate Indicators**: All technical indicators have sufficient data to be accurate from the first candle
+- **Backtesting Consistency**: The same historical data is available for both live trading and backtesting
 
-1.  **Pass 1: Load Base Candles**: The `CandleManager` is first populated with a historical snapshot of the *base timeframe* candles (e.g., 1-minute data).
-2.  **Pass 2: Resample and Backfill**: It then iterates over this historical data to build all the required larger timeframe candles (e.g., creating 5-minute candles from the 1-minute data). During this pass, candles for the larger timeframes are created and backfilled.
-3.  **Pass 3: Flush and Publish**: Finally, the manager performs a "flush," iterating through all completed historical candles (both base and resampled) and publishes them sequentially via `CANDLE_CLOSED` events. This allows the strategy to process them as if they were arriving in real-time, ensuring indicators are calculated correctly.
+### Automatic Preheating
 
-This system guarantees that by the time the first live candle arrives, the strategy's state is fully synchronized with a complete and consistent set of historical data across all required timeframes.
+You can enable automatic preheating in your strategy configuration:
 
-## Strategy Warm-Up Period
+```yaml
+# In your strategy's config.yaml
+strategy_id: "my_pma_strategy"
+symbols: ["BTC/USD"]
+timeframes: ["1m", "5m", "1h"]
+auto_preheat: true  # Enable automatic preheating
+preheat_lookback: 1000  # Number of candles to fetch per timeframe
+```
 
-To ensure that strategies have sufficient data to make informed trading decisions from the moment they go live, the framework implements a mandatory warm-up period. This period is handled by the `BaseStrategy` and is configured in the strategy's YAML file.
+When `auto_preheat: true` is set, the framework will automatically fetch historical data during strategy initialization.
 
-During the warm-up phase, the `BaseStrategy` subscribes to historical candle data from the `CandleManager`. It provides two distinct abstract methods that developers must implement to handle the flow of historical and live data separately.
+### Manual Preheating
 
-### `on_historical_candle(candle: Candle)`
+You can also preheat buffers manually using the command line:
 
-This method is called for each candle processed during the initial warm-up phase. This includes both the base timeframe candles and any resampled, consolidated candles. Use this method to populate indicators and data structures with historical context without triggering trading logic.
+```bash
+# Preheat a specific symbol with multiple timeframes
+python main.py preheat --symbol "BTC/USD" --timeframes 1m 5m 15m 1h --lookback 1000
 
-### `on_live_candle(candle: Candle)`
+# Preheat with default timeframes (1m, 5m, 15m, 1h)
+python main.py preheat --symbol "ETH/USD" --lookback 500
+```
 
-This method is called only *after* the warm-up period is complete for all required timeframes. Live market data, whether from a real-time feed or a backtest, will trigger this method. All trading logic, such as signal generation and order placement, should be placed here.
+### Programmatic Preheating
 
-The `BaseStrategy` tracks the number of historical candles received for each timeframe against the counts specified in the `warm_up_period_candles` configuration. It will only begin calling `on_live_candle` once every timeframe has received its required number of historical candles.
+Within your strategy, you can preheat buffers programmatically:
 
 ```python
-class MyElliottWaveStrategy(BaseStrategy):
+class MyStrategy(BaseStrategy):
+    async def on_initialize(self):
+        """Custom initialization hook."""
+        
+        # Preheat all strategy buffers
+        results = await self.preheat_buffers(lookback_periods=1000)
+        
+        # Preheat specific symbol
+        symbol_results = await self.preheat_symbol("BTC/USD", lookback_periods=500)
+        
+        # Preheat specific timeframe across all symbols
+        timeframe_results = await self.preheat_timeframe("1h", lookback_periods=200)
+        
+        # Check if we have sufficient data
+        if self.has_sufficient_data(min_candles=100):
+            self.logger.info("Strategy has sufficient historical data to start trading")
+        else:
+            self.logger.info("Strategy will wait for more data to accumulate")
+```
 
-    async def initialize(self):
-        # Initialization logic, e.g., setting up indicators
-        self.ema_50 = EMA(period=50)
+### Buffer Status Monitoring
 
-    async def on_historical_candle(self, candle: Candle) -> None:
-        """
-        Called for each historical candle during the warm-up period.
-        """
-        self.logger.info(f"Received historical {candle.timeframe} candle for {candle.symbol}: {candle.close_price}")
-        # Update indicators with historical data
-        if candle.timeframe == '5m':
-            self.ema_50.add_value(candle.close_price)
+You can monitor the status of your candle buffers:
 
-    async def on_live_candle(self, candle: Candle) -> None:
-        """
-        Called for each new live candle after the warm-up is complete.
-        """
-        self.logger.info(f"Received live {candle.timeframe} candle for {candle.symbol}: {candle.close_price}")
-        # Update indicators with live data
-        if candle.timeframe == '5m':
-            self.ema_50.add_value(candle.close_price)
+```python
+# Get status of all buffers
+status = self.get_buffer_status()
+
+# Check specific symbol/timeframe
+btc_status = status.get("BTC/USD", {}).get("1h", {})
+print(f"BTC/USD 1h buffer: {btc_status['buffer_utilization']} candles")
+print(f"Time range: {btc_status['oldest_candle']} to {btc_status['newest_candle']}")
+```
+
+## 7. Best Practices
+
+### Strategy Design
+
+1. **Stay Stateless**: Never store candles in your strategy instance. Always use `self.get_candles()` to fetch data on-demand.
+
+2. **Use Configuration**: Define your symbols and timeframes in your strategy's configuration file, not in code.
+
+3. **Enable Preheating**: Use `auto_preheat: true` in your strategy config to ensure immediate trading capability.
+
+4. **Check Data Sufficiency**: Use `self.has_sufficient_data()` to verify you have enough historical data before making trading decisions.
+
+### Performance Considerations
+
+1. **Efficient Lookbacks**: Only request the number of candles you actually need. Don't fetch 1000 candles if your indicator only needs 20.
+
+2. **Reuse Data**: If you need the same data multiple times in a single candle event, fetch it once and reuse it.
+
+3. **Monitor Buffer Status**: Use the buffer status methods to monitor memory usage and data freshness.
+
+### Configuration Examples
+
+```yaml
+# Minimal configuration
+strategy_id: "simple_strategy"
+symbols: ["BTC/USD"]
+timeframes: ["1m"]
+auto_preheat: true
+
+# Advanced configuration
+strategy_id: "multi_timeframe_strategy"
+symbols: ["BTC/USD", "ETH/USD"]
+timeframes: ["1m", "5m", "15m", "1h", "4h"]
+auto_preheat: true
+preheat_lookback: 2000
+min_candles: 100
+```
+
+## 8. Complete Example: Preheated PMA Strategy
+
+Here's a complete example showing how to create a strategy that uses preheating for immediate trading capability.
+
+### Strategy Configuration
+
+```yaml
+# config/strategies/preheated_pma_strategy.yaml
+
+strategy_id: "preheated_pma_strategy"
+strategy_class: "PreheatedPMAStrategy"
+strategy_path: "src.strategies.preheated_pma_strategy"
+
+# Data configuration
+symbols: ["BTC/USD"]
+timeframes: ["1m", "5m", "15m"]
+
+# Preheating configuration
+auto_preheat: true
+preheat_lookback: 1000
+min_candles: 50
+
+# Strategy parameters
+symbol: "BTC/USD"
+primary_timeframe: "5m"
+pma_period: 20
+order_size: 0.01
+```
+
+### Strategy Implementation
+
+```python
+# src/strategies/preheated_pma_strategy.py
+
+from ..strategy_framework import BaseStrategy, CandleEvent, Signal
+from ..indicators import ProjectedMovingAverage
+
+class PreheatedPMAStrategy(BaseStrategy):
+    """
+    A PMA strategy that uses preheating for immediate trading capability.
+    """
+    
+    async def on_initialize(self):
+        """Custom initialization with preheating verification."""
+        
+        # Check if we have sufficient data after auto-preheating
+        if self.has_sufficient_data():
+            self.logger.info("✅ Strategy has sufficient historical data - ready to trade immediately!")
+        else:
+            self.logger.info("⚠️ Strategy will wait for more data to accumulate")
             
-            # Implement trading logic
-            if candle.close_price > self.ema_50.get():
-                self.logger.info("Price crossed above 50-period EMA. Considering a long position.")
-                # Place buy order, etc.
-
-```
-
-## Technical Analysis
-
-The framework provides a rich set of tools for performing technical analysis on candle data.
-These tools are available as standalone utilities or can be integrated directly into your strategies.
-
-## Best Practices
-
-1. **Error Handling**: Always implement proper error handling for ZMQ connection issues
-2. **Cleanup**: Ensure the subscriber is properly stopped in your strategy's cleanup method
-3. **Configuration**: Use configuration files to manage ZMQ addresses and topics
-4. **Monitoring**: Monitor the subscriber's status through the CandleManager's heartbeat events
-5. **Logging**: Use the built-in logger (`self.logger`) to record important events, decisions, and errors within your strategy. This is invaluable for debugging and performance analysis.
-6. **Configuration**: Keep strategy parameters in configuration files rather than hardcoding them. This makes it easier to tune, backtest, and manage your strategies.
-7. **State Management**: Be mindful of strategy state. Use the provided methods for warm-up (`on_historical_candle`) and live trading (`on_live_candle`) to ensure a clean separation of concerns.
-
-## Error Handling
-
-The candle system includes comprehensive error handling:
-1. Validates all incoming tick data
-2. Checks for data consistency
-3. Handles gaps in data
-4. Recovers from errors automatically
-5. Provides detailed error logging
-
-## Performance Considerations
-
-1. The system maintains memory limits for ticks and candles
-2. Regular cleanup of old data
-3. Efficient event processing
-4. Optimized candle generation
-5. Regular health checks and monitoring
-
-## Monitoring and Maintenance
-
-1. Monitor system health through heartbeats
-2. Check for data consistency
-3. Monitor memory usage
-4. Track tick and candle counts
-5. Monitor active symbols and timeframes
-
-## Examples
-
-### Basic Strategy Example
-```python
-class SimpleStrategy(BaseStrategy):
-    def __init__(self, config_path: str):
-        super().__init__(config_path)
-        
-        # Register timeframes
-        self.candle_manager.register_timeframe('14m', 14, 'm')
-        
-        # Subscribe to events
-        self.candle_manager.subscribe_to_events(
-            CandleEventType.NEW_CANDLE,
-            'BTC/USD',
-            '14m',
-            self.on_candle_event
-        )
+        # Get buffer status for monitoring
+        status = self.get_buffer_status()
+        for symbol in self.symbols:
+            for timeframe in self.timeframes:
+                buffer_info = status.get(symbol, {}).get(timeframe, {})
+                self.logger.info(f"Buffer {symbol}/{timeframe}: {buffer_info.get('buffer_utilization', '0/0')} candles")
     
-    async def on_candle_event(self, event: CandleEvent):
-        if event.event_type == CandleEventType.NEW_CANDLE:
-            # Update indicators
-            await self._update_indicators(event.candle_data)
+    async def on_live_candle(self, event: CandleEvent):
+        """Main trading logic - called immediately after preheating."""
+        
+        symbol = self.config.get('symbol')
+        primary_timeframe = self.config.get('primary_timeframe', '5m')
+        pma_period = self.config.get('pma_period', 20)
+        
+        # Only process events for our primary timeframe
+        if event.timeframe != primary_timeframe:
+            return
             
-            # Generate signals
-            signals = await self.generate_signals()
-            for signal in signals:
-                await self.process_signal(signal)
+        # Fetch historical data (now immediately available due to preheating)
+        candles = self.get_candles(symbol, primary_timeframe, lookback=pma_period)
         
-        elif event.event_type == CandleEventType.CANDLE_CLOSED:
-            # Check for trading signals
-            previous_candle = self.get_previous_candle(event.symbol, event.timeframe)
-            if previous_candle and event.candle_data.close > previous_candle.high:
-                await self.enter_position(event.symbol, 'long', event.candle_data.close)
+        if len(candles) < pma_period:
+            self.logger.warning(f"Insufficient data: {len(candles)}/{pma_period} candles")
+            return
+            
+        # Calculate PMA
+        closes = [float(c.close) for c in candles]
+        pma_indicator = ProjectedMovingAverage(period=pma_period)
+        pma_value = pma_indicator.calculate(closes)
+        
+        if pma_value is None:
+            return
+            
+        # Trading logic
+        current_price = float(event.candle.close)
+        order_size = self.config.get('order_size', 0.01)
+        
+        if current_price > pma_value:
+            self.logger.info(f"BUY signal: Price {current_price} > PMA {pma_value:.2f}")
+            await self.place_tracked_order(
+                symbol=symbol,
+                order_type='market',
+                side='buy',
+                quantity=order_size
+            )
+        elif current_price < pma_value:
+            self.logger.info(f"SELL signal: Price {current_price} < PMA {pma_value:.2f}")
+            await self.place_tracked_order(
+                symbol=symbol,
+                order_type='market',
+                side='sell',
+                quantity=order_size
+            )
 ```
 
-### Advanced Strategy Example
-```python
-class AdvancedStrategy(BaseStrategy):
-    def __init__(self, config_path: str):
-        super().__init__(config_path)
-        
-        # Initialize indicators
-        self.rsi = CandleRSI(period=14)
-        self.macd = CandleMACD()
-        
-        # Subscribe to multiple events
-        self.candle_manager.subscribe_to_events(
-            CandleEventType.NEW_CANDLE,
-            'BTC/USD',
-            '1h',
-            self.on_candle_event
-        )
-        self.candle_manager.subscribe_to_events(
-            CandleEventType.PRICE_ALERT,
-            'BTC/USD',
-            '1h',
-            self.on_price_alert
-        )
-    
-    async def on_candle_event(self, event: CandleEvent):
-        # Update indicators
-        self.rsi.update(event.candle_data)
-        self.macd.update(event.candle_data)
-        
-        # Generate signals based on multiple indicators
-        if (self.rsi.get_value() < 30 and 
-            self.macd.get_histogram() > 0):
-            await self.enter_position(event.symbol, 'long', event.candle_data.close)
-    
-    async def on_price_alert(self, event: CandleEvent):
-        price_level = event.additional_data['price_level']
-        condition = event.additional_data['condition']
-        
-        if event.symbol in self.positions:
-            position = self.positions[event.symbol]
-            if (position['side'] == 'long' and condition == 'below' and
-                event.candle_data.close < float(price_level)):
-                await self.exit_position(event.symbol, event.candle_data.close)
-```
+### Usage
 
-This manual provides a comprehensive guide to working with candles in our trading system. The new integrated candle management system makes it easier to work with candle data while maintaining good performance and memory management. 
+1. **Deploy the strategy**:
+   ```bash
+   python main.py deploy-strategy --config config/strategies/preheated_pma_strategy.yaml
+   ```
+
+2. **Start the framework**:
+   ```bash
+   python main.py start
+   ```
+
+3. **Monitor buffer status**:
+   ```bash
+   python main.py preheat --symbol "BTC/USD" --timeframes 1m 5m 15m --lookback 100
+   ```
+
+The strategy will start trading immediately with full historical context, no warm-up period required! 

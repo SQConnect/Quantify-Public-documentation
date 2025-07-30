@@ -8,6 +8,8 @@ The PnL Tracker and Order Logger are automatically integrated into all strategie
 - **📊 Comprehensive Metrics**: Win rate, Sharpe ratio, drawdown, profit factor, and more
 - **📝 Centralized Order Logging**: All order activity logged consistently across brokers
 - **🚨 Telegram Alerts**: Optional notifications for trades and errors
+- **💾 Automatic Database Persistence**: Performance metrics are snapshotted and saved to the database automatically.
+- **🔔 Daily Summary Alerts**: Receive a daily PnL summary for all strategies via Telegram.
 - **🎯 Zero Broker Code**: Order logging removed from individual brokers for cleaner architecture
 
 ## Automatic Integration
@@ -22,6 +24,16 @@ class MyStrategy(BaseStrategy):
         # self.pnl_tracker - for performance metrics
         # self.order_logger - for order logging (used internally)
 ```
+
+## Automatic Persistence and Alerting
+
+Beyond the in-strategy access, the framework provides a centralized system for managing performance data across all strategies. This system operates automatically in the background:
+
+- **Database Snapshots**: Every 15 minutes, the system takes a "snapshot" of the complete performance metrics from the `PnLTracker` of each running strategy and saves it to a central database. This creates a historical record of your strategies' performance over time.
+
+- **Daily Telegram Summaries**: At the end of the US market session each day, the system queries the database to calculate the total PnL across all strategies for that day. It then sends a summary report to your configured Telegram channel. This provides a convenient end-of-day overview of your portfolio's performance.
+
+This functionality requires no code within your strategies. It is part of the core framework.
 
 ## Automatic Trade Tracking
 
@@ -162,6 +174,37 @@ class MyStrategy(BaseStrategy):
 ```
 
 ## Performance Reporting
+
+### Viewing Performance from the Command Line
+
+The most convenient way to view performance is through the interactive CLI.
+
+1.  Run the interactive console:
+    ```bash
+    python main.py interactive
+    ```
+
+2.  If the framework is running, select the **"Show Performance Metrics"** option.
+
+3.  You can then choose to view metrics for a specific strategy. The output will include the latest performance snapshot from the database, including key metrics and a summary of today's PnL.
+
+```
+🎯 ===== PERFORMANCE: MyStrategy (MyStrategy) =====
+
+--- Today's PnL Summary ---
+  - Strategy: MyStrategy, PnL: $1,234.56
+
+💰 CORE PnL METRICS:
+   Total PnL:        $1234.56
+   Daily PnL:        $1234.56
+
+⚡ RISK METRICS:
+   Max Drawdown:     $500.00
+   Sharpe Ratio:     1.85
+   Sortino Ratio:    2.50
+
+... and more ...
+```
 
 ### Export Comprehensive Report
 
