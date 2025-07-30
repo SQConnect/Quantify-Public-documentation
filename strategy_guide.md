@@ -619,6 +619,77 @@ This Greeks event system enables:
 
 ## Strategy Implementation
 
+### Unified Import API for Strategies
+
+To make strategy development as simple and robust as possible, Quantify provides a unified import API. All core framework classes, helpers, and types are available via:
+
+```python
+from Quantify.Strategy import *
+```
+
+This single import gives you access to:
+- All base strategy classes (`BaseStrategy`, `BaseFuturesStrategy`, `BaseOptionsStrategy`)
+- All event and data manager classes (`EventManager`, `CandleEvent`, `CandleManager`)
+- All order and portfolio managers (`OrderManager`, `PositionManager`)
+- All order types (`BaseOrder`, `OptionOrder`, `FuturesOrder`)
+- All helpers (`FuturesHelper`, `OptionsHelper`, `FuturesRollHelper`)
+- ...and more as the framework evolves
+
+**Example:**
+```python
+from Quantify.Strategy import *
+
+class MyStrategy(BaseStrategy):
+    candle_count: int = 0
+    # ...
+```
+
+**Best Practice:**
+- Only use this unified import for all framework classes and helpers.
+- Remove all other framework-related imports from your strategy files.
+- Only import third-party or strategy-specific modules as needed.
+
+---
+
+### Strategy Lifecycle: Initialization and Cleanup (Template Method Pattern)
+
+To keep user strategies simple and robust, the Quantify framework uses the **template method pattern** for lifecycle management. This means:
+
+- The framework handles all required setup and teardown.
+- Users only override `on_initialize()` and/or `on_cleanup()` for their custom logic.
+- **You never need to call `super().__init__` or `super().initialize()` or `super().cleanup()` in your strategy!**
+- **You do not need an `__init__` method at all unless you want to set up custom fields.**
+- If you do define `__init__`, do NOT call `super().__init__`—the framework will handle it.
+
+#### Class-Level Defaults for Custom Fields
+
+**Best Practice:**
+All custom fields used in event handlers (like `on_live_candle`) should have class-level defaults. This guarantees they exist before any async code runs, even during warm-up or event replay.
+
+**Example:**
+```python
+class MyStrategy(BaseStrategy):
+    candle_count: int = 0
+    my_custom_field: str = ""
+
+    async def on_initialize(self):
+        self.candle_count = 0  # Optionally reset
+        self.my_custom_field = self.config.get("my_custom_field", "default")
+        self.logger.info("Custom setup here")
+```
+
+**Why?**
+- Event handlers may be called before `on_initialize` completes (e.g., during warm-up).
+- Class-level defaults prevent `AttributeError` for missing fields.
+- This makes your strategies robust and safe for all framework event flows.
+
+#### Migrating Old Strategies
+- Move all custom field assignments to class-level defaults or set them in `on_initialize`.
+- Ensure any field used in an event handler is always defined at the class level.
+- Remove any reliance on `__init__` for field setup unless absolutely necessary.
+
+---
+
 ### Strategy Components
 1. **Signal Generation**
    - Technical signals
